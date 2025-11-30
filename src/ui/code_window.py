@@ -81,7 +81,7 @@ class CodeWindow(QMainWindow):
         self.worker_thread = QThread()
 
         # 创建 Worker（会在线程中运行）
-        self.worker = DeviceWorker('/dev/cu.usbmodem11201')
+        self.worker = DeviceWorker('')
 
         # 将 Worker 移动到线程
         self.worker.moveToThread(self.worker_thread)
@@ -161,11 +161,11 @@ class CodeWindow(QMainWindow):
 
     def refresh_ports(self, auto_connect: bool = True):
         ports = [(info.device, format_label(info)) for info in find_pico_ports()]
-        self.toolbar.set_ports(ports, self.current_port)
         devices = [device for device, _ in ports]
 
         if not ports:
             self.current_port = None
+            self.toolbar.set_ports([], None)
             self.status_bar.showMessage("未检测到 Raspberry Pi Pico 设备")
             self._connect_when_ready = False
             return
@@ -173,6 +173,8 @@ class CodeWindow(QMainWindow):
         if not self.current_port or self.current_port not in devices:
             self.current_port = devices[0]
             self.status_bar.showMessage(f"已选择 {self.current_port}")
+
+        self.toolbar.set_ports(ports, self.current_port)
 
         self.worker.set_port_requested.emit(self.current_port)
 

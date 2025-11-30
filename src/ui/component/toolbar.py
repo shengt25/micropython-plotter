@@ -15,7 +15,7 @@ class CodeToolBar(QToolBar):
         super().__init__("Code Control", parent)
 
         self.run_action = QAction("Run", self)
-        self.stop_action = QAction("Stop", self)
+        self.stop_action = QAction("Stop/Reset", self)
         self.save_action = QAction("Save", self)
         self.port_combo = QComboBox(self)
         self.port_combo.setPlaceholderText("选择串口…")

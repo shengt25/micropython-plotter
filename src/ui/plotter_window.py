@@ -216,6 +216,7 @@ class PlotterWindow(QWidget):
             self.curves.append(curve)
 
         # Statistics label (below plot)
+        graphics_widget.nextRow()
         self.stats_label = pg.LabelItem(justify="left")
         graphics_widget.addItem(self.stats_label)
 
@@ -295,15 +296,21 @@ class PlotterWindow(QWidget):
     def _update_curve_name(self, index, name):
         """Update the legend name for a curve"""
         if 0 <= index < len(self.curves):
-            # Remove old curve from legend and re-add with new name
-            self.curves[index].setData([], [])  # Clear temporarily
+            # Store current curve
+            old_curve = self.curves[index]
 
-            # Update curve with new name
-            self.curves[index] = self.plot.plot(
+            # Remove old curve from plot and legend
+            self.plot.removeItem(old_curve)
+
+            # Create new curve with updated name
+            new_curve = self.plot.plot(
                 pen=pg.mkPen(self.curve_colors[index], width=2),
                 name=name or f"Channel {index + 1}",
                 skipFiniteCheck=True
             )
+
+            # Replace in curves list
+            self.curves[index] = new_curve
 
     @Slot(int)
     def _on_refresh_rate_changed(self, index):
@@ -354,9 +361,26 @@ class PlotterWindow(QWidget):
         # Apply background color
         self.graphics_widget.setBackground(bg_color)
 
-        # Apply curve colors
+        # Apply curve colors - need to recreate curves to update legend colors
         for i, color in enumerate(curve_colors):
-            self.curves[i].setPen(pg.mkPen(color, width=2))
+            # Store old curve
+            old_curve = self.curves[i]
+
+            # Get current name from text input
+            current_name = self.channel_name_inputs[i].text() or f"Channel {i + 1}"
+
+            # Remove old curve from plot and legend
+            self.plot.removeItem(old_curve)
+
+            # Create new curve with updated color
+            new_curve = self.plot.plot(
+                pen=pg.mkPen(color, width=2),
+                name=current_name,
+                skipFiniteCheck=True
+            )
+
+            # Replace in curves list
+            self.curves[i] = new_curve
 
     @Slot(list)
     def on_plot_data_received(self, values: list):

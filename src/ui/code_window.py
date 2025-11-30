@@ -75,6 +75,13 @@ class CodeWindow(QMainWindow):
         # 在线程启动后初始化 Worker（重要：必须在线程中创建串口对象）
         self.worker_thread.started.connect(self.worker.initialize)
 
+        # 连接请求信号到槽函数（UI -> Worker）
+        # Qt 会自动使用 QueuedConnection，确保在 Worker 线程执行
+        self.worker.connect_requested.connect(self.worker.do_connect)
+        self.worker.run_code_requested.connect(self.worker.do_run_code)
+        self.worker.stop_requested.connect(self.worker.do_stop)
+        self.worker.disconnect_requested.connect(self.worker.do_disconnect)
+
         # 启动线程
         self.worker_thread.start()
 
@@ -103,7 +110,7 @@ class CodeWindow(QMainWindow):
     def _connect_device(self):
         """连接设备"""
         # 触发 Worker 连接设备（异步执行）
-        self.worker.do_connect()
+        self.worker.connect_requested.emit()
 
     def on_run_code(self):
         """运行代码按钮处理"""
@@ -118,7 +125,7 @@ class CodeWindow(QMainWindow):
         self.set_buttons_enabled(False)
 
         # 触发 Worker 执行代码（异步执行）
-        self.worker.do_run_code(code)
+        self.worker.run_code_requested.emit(code)
 
     def on_stop_code(self):
         """停止代码按钮处理"""
@@ -126,7 +133,7 @@ class CodeWindow(QMainWindow):
         self.set_buttons_enabled(False)
 
         # 触发 Worker 停止代码（异步执行）
-        self.worker.do_stop()
+        self.worker.stop_requested.emit()
 
     def on_connect_finished(self, success):
         """连接完成处理"""
@@ -152,7 +159,7 @@ class CodeWindow(QMainWindow):
         """窗口关闭事件"""
         # 1. 断开设备（在 Worker 线程中执行）
         self.output_console.append_info("[系统] 正在断开设备连接...")
-        self.worker.do_disconnect()
+        self.worker.disconnect_requested.emit()
 
         # 2. 停止并等待线程结束
         self.worker_thread.quit()

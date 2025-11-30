@@ -9,6 +9,12 @@ class DeviceWorker(QObject):
     避免阻塞 UI 线程
     """
 
+    # Signals - 请求信号（UI -> Worker）
+    connect_requested = Signal()        # 请求连接设备
+    run_code_requested = Signal(str)    # 请求运行代码
+    stop_requested = Signal()           # 请求停止代码
+    disconnect_requested = Signal()     # 请求断开连接
+
     # Signals - 操作完成信号
     initialized = Signal()              # Worker 初始化完成
     connect_finished = Signal(bool)     # 连接完成 (成功/失败)

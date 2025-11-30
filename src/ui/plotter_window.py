@@ -3,7 +3,7 @@ from collections import deque
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel,
     QLineEdit, QPushButton, QDialog, QFormLayout, QDialogButtonBox,
-    QColorDialog
+    QColorDialog, QComboBox
 )
 from PySide6.QtCore import Signal, Slot, QTimer, Qt
 from PySide6.QtGui import QColor
@@ -137,6 +137,11 @@ class PlotterWindow(QWidget):
         # Statistics
         self.packet_count = 0
 
+        # Refresh rate and pause control
+        self.is_paused = False
+        self.refresh_rates = [10, 20, 30, 60]  # Hz
+        self.current_refresh_rate = 30  # Default 30 Hz
+
         # UI components (will be created in _setup_ui)
         self.channel_name_inputs = []
         self.curves = []
@@ -236,6 +241,24 @@ class PlotterWindow(QWidget):
         color_button.clicked.connect(self._open_color_settings)
         layout.addWidget(color_button)
 
+        layout.addSpacing(20)
+
+        # Refresh rate selection
+        layout.addWidget(QLabel("Refresh Rate:"))
+        self.refresh_rate_combo = QComboBox()
+        self.refresh_rate_combo.addItems(["10 Hz", "20 Hz", "30 Hz", "60 Hz"])
+        self.refresh_rate_combo.setCurrentIndex(2)  # Default 30 Hz
+        self.refresh_rate_combo.currentIndexChanged.connect(self._on_refresh_rate_changed)
+        layout.addWidget(self.refresh_rate_combo)
+
+        layout.addSpacing(10)
+
+        # Pause/Resume button
+        self.pause_button = QPushButton("Pause")
+        self.pause_button.setCheckable(True)
+        self.pause_button.clicked.connect(self._on_pause_toggled)
+        layout.addWidget(self.pause_button)
+
         # Add stretch to push everything to the top
         layout.addStretch()
 
@@ -243,10 +266,11 @@ class PlotterWindow(QWidget):
 
     def _setup_timers(self):
         """Setup timers for UI updates"""
-        # UI update timer - 20 Hz (50ms)
+        # UI update timer - default 30 Hz
+        interval_ms = int(1000 / self.current_refresh_rate)
         self.ui_timer = QTimer()
         self.ui_timer.timeout.connect(self.update_ui)
-        self.ui_timer.start(50)
+        self.ui_timer.start(interval_ms)
 
     @Slot(int, str)
     def _update_curve_name(self, index, name):
@@ -261,6 +285,28 @@ class PlotterWindow(QWidget):
                 name=name or f"Channel {index + 1}",
                 skipFiniteCheck=True
             )
+
+    @Slot(int)
+    def _on_refresh_rate_changed(self, index):
+        """Handle refresh rate change"""
+        self.current_refresh_rate = self.refresh_rates[index]
+        interval_ms = int(1000 / self.current_refresh_rate)
+
+        # Update timer interval
+        if self.ui_timer:
+            self.ui_timer.setInterval(interval_ms)
+
+    @Slot(bool)
+    def _on_pause_toggled(self, checked):
+        """Handle pause/resume toggle"""
+        self.is_paused = checked
+
+        if checked:
+            # Paused
+            self.pause_button.setText("Resume")
+        else:
+            # Resumed
+            self.pause_button.setText("Pause")
 
     @Slot()
     def _open_color_settings(self):
@@ -296,6 +342,10 @@ class PlotterWindow(QWidget):
         Args:
             values: List of up to 5 uint16 values
         """
+        # Discard data if paused
+        if self.is_paused:
+            return
+
         current_time = time.time() - self.start_time
         self.time_buffer.append(current_time)
 

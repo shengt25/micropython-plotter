@@ -17,6 +17,9 @@ class CodeWindow(QMainWindow):
         self.setWindowTitle("MicroPython Code Runner")
         self.resize(900, 700)
 
+        # 绘图窗口（按需创建）
+        self.plotter_window = None
+
         # 创建 UI 组件
         self._setup_ui()
 
@@ -145,6 +148,12 @@ class CodeWindow(QMainWindow):
         self.toolbar.port_selected.connect(self.on_port_selected)
 
         self.worker.port_changed.connect(lambda port: self.status_bar.showMessage(f"串口已切换到 {port}"))
+
+        # 绘图按钮 -> 打开绘图窗口
+        self.toolbar.plot_clicked.connect(self.on_plot_clicked)
+
+        # 绘图数据 -> 转发到绘图窗口
+        self.worker.plot_data_received.connect(self._forward_plot_data)
 
         # 初始化时扫描一次串口但暂不立即连接（等待 Worker 就绪）
         self.refresh_ports(auto_connect=True)
@@ -352,15 +361,50 @@ class CodeWindow(QMainWindow):
         self.toolbar.run_action.setEnabled(enabled)
         self.toolbar.stop_action.setEnabled(enabled)
 
+    def on_plot_clicked(self):
+        """绘图按钮点击处理"""
+        if self.plotter_window is None:
+            # 创建绘图窗口
+            from .plotter_window import PlotterWindow
+            self.plotter_window = PlotterWindow()
+            self.plotter_window.closed.connect(self._on_plotter_closed)
+
+        # 显示窗口（创建新窗口或恢复最小化的窗口）
+        self.plotter_window.show()
+        self.plotter_window.raise_()
+        self.plotter_window.activateWindow()
+
+        # 启用绘图模式
+        self.worker.set_plot_mode(True)
+
+    def _on_plotter_closed(self):
+        """绘图窗口关闭处理"""
+        # 禁用绘图模式
+        self.worker.set_plot_mode(False)
+
+    def _forward_plot_data(self, values: list):
+        """
+        转发绘图数据到绘图窗口
+
+        Args:
+            values: 绘图数据值列表
+        """
+        if self.plotter_window and self.plotter_window.isVisible():
+            self.plotter_window.on_plot_data_received(values)
+
     def closeEvent(self, event):
         """窗口关闭事件"""
-        # 1. 断开设备（在 Worker 线程中执行）
+        # 1. 关闭绘图窗口
+        if self.plotter_window:
+            self.plotter_window.close()
+
+        # 2. 断开设备（在 Worker 线程中执行）
         self.output_console.append_info("[系统] 正在断开设备连接...")
         self.worker.disconnect_requested.emit()
 
-        # 2. 停止并等待线程结束
+        # 3. 停止并等待线程结束
         self.worker_thread.quit()
         self.worker_thread.wait(3000)  # 最多等待 3 秒
 
-        # 3. 接受关闭事件
+        # 4. 接受关闭事件
         event.accept()

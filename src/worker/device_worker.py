@@ -1,6 +1,7 @@
-from PySide6.QtCore import QObject, Signal, Slot
+from PySide6.QtCore import QObject, Signal, Slot, QTimer
 from .device_manager import DeviceManager
 from .code_runner import CodeRunner
+from .plot_stream_handler import PlotStreamHandler
 
 
 class DeviceWorker(QObject):
@@ -37,6 +38,9 @@ class DeviceWorker(QObject):
     output_received = Signal(str)
     error_received = Signal(str)
 
+    # Signals - 绘图数据
+    plot_data_received = Signal(list)  # 绘图数据包
+
     # Signals - 端口变化
     port_changed = Signal(str)
 
@@ -48,6 +52,9 @@ class DeviceWorker(QObject):
         # 这些对象会在 Worker 线程中创建和使用
         self.device_manager = None
         self.code_runner = None
+        self.plot_handler = None
+        self.monitor_timer = None
+        self.plot_mode_enabled = False
 
     @Slot()
     def initialize(self):
@@ -58,9 +65,20 @@ class DeviceWorker(QObject):
         self.device_manager = DeviceManager(self.port, self.baudrate)
         self.code_runner = CodeRunner(self.device_manager)
 
+        # 创建绘图数据流处理器
+        self.plot_handler = PlotStreamHandler(self.device_manager)
+
         # 连接 CodeRunner 的 Signals 并转发到 UI
         self.code_runner.output_received.connect(self.output_received.emit)
         self.code_runner.error_received.connect(self.error_received.emit)
+
+        # 连接 PlotStreamHandler 的 Signals
+        self.plot_handler.plot_data_received.connect(self.plot_data_received.emit)
+        self.plot_handler.text_data_received.connect(self.output_received.emit)
+
+        # 创建后台监控定时器
+        self.monitor_timer = QTimer()
+        self.monitor_timer.timeout.connect(self._monitor_serial_output)
 
         # 发出初始化完成信号
         self.initialized.emit()
@@ -126,6 +144,9 @@ class DeviceWorker(QObject):
         success = self.code_runner.run_code(code)
 
         if success:
+            # 启动后台监控，读取串口输出
+            if self.monitor_timer:
+                self.monitor_timer.start(50)  # 每 50ms 轮询一次
             self.status_changed.emit("代码执行成功")
         else:
             self.status_changed.emit("代码执行失败")
@@ -138,11 +159,16 @@ class DeviceWorker(QObject):
         停止代码
 
         步骤：
-        1. 检查连接
-        2. 发送停止信号
-        3. 如果串口异常，自动重新连接
+        1. 停止后台监控
+        2. 检查连接
+        3. 发送停止信号
+        4. 如果串口异常，自动重新连接
         """
-        # 1. 确保连接
+        # 1. 停止后台监控
+        if self.monitor_timer and self.monitor_timer.isActive():
+            self.monitor_timer.stop()
+
+        # 2. 确保连接
         if not self.device_manager.is_connected():
             self.progress.emit("[系统] 正在连接设备...")
             self.status_changed.emit("正在连接...")
@@ -430,3 +456,50 @@ class DeviceWorker(QObject):
         self.device_manager.port = port
         self.device_manager.disconnect()
         self.port_changed.emit(port)
+
+    @Slot(bool)
+    def set_plot_mode(self, enabled: bool):
+        """
+        启用/禁用绘图模式
+
+        Args:
+            enabled: True 启用绘图模式，False 禁用
+        """
+        self.plot_mode_enabled = enabled
+        if self.plot_handler:
+            # 清空缓冲区，避免残留数据
+            self.plot_handler.buffer.clear()
+
+    def _monitor_serial_output(self):
+        """
+        后台监控串口输出（定时器回调）
+
+        在代码运行时定期读取串口数据，并根据是否启用绘图模式进行分流：
+        - 绘图模式：通过 PlotStreamHandler 解析数据包
+        - 普通模式：直接解码为文本输出
+        """
+        if not self.device_manager or not self.device_manager.is_connected():
+            return
+
+        try:
+            with self.device_manager.lock:
+                # 检查是否有数据可读
+                if self.device_manager.serial.in_waiting > 0:
+                    # 读取所有可用数据
+                    raw_data = self.device_manager.serial.read(
+                        self.device_manager.serial.in_waiting
+                    )
+
+                    if self.plot_mode_enabled and self.plot_handler:
+                        # 绘图模式：通过处理器解析数据包
+                        self.plot_handler.process_data(raw_data)
+                    else:
+                        # 普通模式：解码为文本
+                        text = raw_data.decode('utf-8', errors='replace')
+                        if text:
+                            self.output_received.emit(text)
+
+        except Exception as e:
+            from utils.logger import setup_logger
+            logger = setup_logger(__name__)
+            logger.exception("后台监控串口输出异常")

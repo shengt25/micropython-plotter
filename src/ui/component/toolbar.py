@@ -8,6 +8,7 @@ class CodeToolBar(QToolBar):
     run_clicked = Signal()
     stop_clicked = Signal()
     save_clicked = Signal()
+    plot_clicked = Signal()
     port_refresh_requested = Signal()
     port_selected = Signal(str)
 
@@ -17,6 +18,7 @@ class CodeToolBar(QToolBar):
         self.run_action = QAction("Run", self)
         self.stop_action = QAction("Stop/Reset", self)
         self.save_action = QAction("Save", self)
+        self.plot_action = QAction("Plot", self)
         self.port_combo = QComboBox(self)
         self.port_combo.setPlaceholderText("选择串口…")
         self.port_combo.setMinimumWidth(200)
@@ -27,6 +29,7 @@ class CodeToolBar(QToolBar):
         self.run_action.triggered.connect(self.run_clicked.emit)
         self.stop_action.triggered.connect(self.stop_clicked.emit)
         self.save_action.triggered.connect(self.save_clicked.emit)
+        self.plot_action.triggered.connect(self.plot_clicked.emit)
 
         # 保存按钮默认禁用（只有打开文件并修改后才启用）
         self.save_action.setEnabled(False)
@@ -35,6 +38,7 @@ class CodeToolBar(QToolBar):
         self.addAction(self.stop_action)
         self.addSeparator()
         self.addAction(self.save_action)
+        self.addAction(self.plot_action)
         self.addSeparator()
         self.addWidget(self.port_combo)
         self.addAction(self.refresh_ports_action)

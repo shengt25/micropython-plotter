@@ -42,18 +42,23 @@ class FileBrowser(QWidget):
         self.tree.hide()
         self.placeholder.show()
         self._root_path = "/"
+        self._path_to_item = {}
+        self._loading_paths = set()
 
     def initialize_root(self):
         """初始化根目录（设备连接后调用）"""
         self.tree.clear()
         self.placeholder.hide()
         self.tree.show()
-
-        # 直接请求根目录内容，不再创建可见的“/”节点
-        self.dir_expand_requested.emit(self._root_path)
+        self._path_to_item = {self._root_path: self.tree.invisibleRootItem()}
+        self._loading_paths.clear()
+        self._request_directory(self._root_path)
 
     def show_error(self, message: str):
         """显示错误"""
+        self._loading_paths.clear()
+        self._path_to_item.clear()
+        self.tree.clear()
         self.tree.hide()
         self.placeholder.setText(message)
         self.placeholder.show()
@@ -70,25 +75,22 @@ class FileBrowser(QWidget):
             self._populate_children(self.tree.invisibleRootItem(), items, path)
             return
 
-        item = self._find_item_by_path(path)
-        if not item:
+        parent = self._path_to_item.get(path)
+        if not parent:
             return
 
-        item.takeChildren()
-        self._populate_children(item, items, path)
+        self._loading_paths.discard(path)
+        self._clear_children(parent)
+        self._populate_children(parent, items, path)
 
     def _populate_children(self, parent: QTreeWidgetItem, items: list, path: str):
         """为指定父节点填充子节点"""
-        # 清理顶层节点内容（仅当父节点为不可见根时生效）
-        if parent == self.tree.invisibleRootItem():
-            while self.tree.topLevelItemCount() > 0:
-                self.tree.takeTopLevelItem(0)
-
         for name, is_dir in items:
             full_path = f"{path}/{name}" if path != "/" else f"/{name}"
             child = QTreeWidgetItem(parent, [name])
             child.setData(0, Qt.ItemDataRole.UserRole, full_path)
             child.setData(0, Qt.ItemDataRole.UserRole + 1, is_dir)
+            self._path_to_item[full_path] = child
 
             if is_dir:
                 placeholder = QTreeWidgetItem(child, ["加载中..."])
@@ -111,20 +113,47 @@ class FileBrowser(QWidget):
         path = item.data(0, Qt.ItemDataRole.UserRole)
         is_dir = item.data(0, Qt.ItemDataRole.UserRole + 1)
 
-        if not is_dir:
+        if not path or not is_dir:
             return
 
         # 检查是否已加载（子节点是占位符）
         if item.childCount() > 0 and item.child(0).isDisabled():
-            self.dir_expand_requested.emit(path)
+            self._request_directory(path)
 
     def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int):
         """节点双击事件"""
         path = item.data(0, Qt.ItemDataRole.UserRole)
         is_dir = item.data(0, Qt.ItemDataRole.UserRole + 1)
 
+        if not path:
+            return
+
         if is_dir:
-            item.setExpanded(not item.isExpanded())
+            if not item.isExpanded():
+                item.setExpanded(True)
+            if item.childCount() == 0 or item.child(0).isDisabled():
+                self._request_directory(path)
             return
 
         self.file_open_requested.emit(path)
+
+    def _request_directory(self, path: str):
+        if path in self._loading_paths:
+            return
+        self._loading_paths.add(path)
+        self.dir_expand_requested.emit(path)
+
+    def _clear_children(self, parent: QTreeWidgetItem):
+        while parent.childCount():
+            child = parent.takeChild(0)
+            self._remove_subtree(child)
+
+    def _remove_subtree(self, item: QTreeWidgetItem):
+        path = item.data(0, Qt.ItemDataRole.UserRole)
+        if path:
+            self._path_to_item.pop(path, None)
+        while item.childCount():
+            child = item.takeChild(0)
+            self._remove_subtree(child)
+        del item
+

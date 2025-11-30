@@ -202,11 +202,9 @@ class CodeWindow(QMainWindow):
         # 1. 先检查当前文件是否需要保存
         path, content, modified = self.tab_editor.get_current_file_info()
         if path and modified:
-            # 自动保存
+            # 自动保存（等待异步完成信号后才标记为已保存）
             self.output_console.append_info("[系统] 自动保存文件...")
             self.worker.write_file_requested.emit(path, content)
-            # 标记为已保存
-            self.tab_editor.mark_current_saved()
 
         # 2. 获取代码
         code = self.tab_editor.get_current_code().strip()
@@ -281,9 +279,24 @@ class CodeWindow(QMainWindow):
     def on_read_file_finished(self, success: bool, path: str, content: str):
         """文件读取完成处理"""
         if success:
-            # 在新标签中打开文件
-            self.tab_editor.open_file(path, content)
-            self.output_console.append_info(f"[文件] 成功打开: {path}")
+            # 检查文件是否已经在标签中打开
+            current_path, _, _ = self.tab_editor.get_current_file_info()
+
+            # 查找是否有已打开的标签
+            is_already_open = False
+            for index, state in self.tab_editor.tab_states.items():
+                if state['path'] == path:
+                    is_already_open = True
+                    break
+
+            if is_already_open:
+                # 已打开，更新内容（不触发修改标记）
+                self.tab_editor.update_file_content(path, content)
+                self.output_console.append_info(f"[文件] 已更新内容: {path}")
+            else:
+                # 未打开，在新标签中打开
+                self.tab_editor.open_file(path, content)
+                self.output_console.append_info(f"[文件] 成功打开: {path}")
         else:
             self.output_console.append_error(f"[文件] 打开失败: {path}")
 
@@ -299,16 +312,22 @@ class CodeWindow(QMainWindow):
             self.output_console.append_info("[文件] 文件未修改，无需保存")
             return
 
-        # 触发 Worker 写入文件
+        # 触发 Worker 写入文件（等待异步完成信号后才标记为已保存）
         self.output_console.append_info(f"[文件] 正在保存: {path}")
         self.worker.write_file_requested.emit(path, content)
 
-        # 标记为已保存
-        self.tab_editor.mark_current_saved()
-
     def on_write_file_finished(self, success: bool, path: str):
         """文件写入完成处理"""
-        if not success:
+        if success:
+            # 保存成功，标记为已保存
+            self.tab_editor.mark_file_saved(path)
+            self.output_console.append_info(f"[文件] 保存成功: {path}")
+
+            # 重新读取文件，确保内容一致
+            self.output_console.append_info(f"[文件] 重新读取文件以确认内容...")
+            self.worker.read_file_requested.emit(path)
+        else:
+            # 保存失败，保持修改状态
             self.output_console.append_error(f"[文件] 保存失败: {path}")
 
     def on_file_modified(self, modified: bool):

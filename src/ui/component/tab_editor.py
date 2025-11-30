@@ -108,6 +108,40 @@ class TabEditorWidget(QWidget):
             self._update_tab_title(current_index)
             self.file_modified.emit(False)
 
+    def mark_file_saved(self, path: str):
+        """
+        标记指定路径的文件为已保存状态
+
+        Args:
+            path: 文件路径
+        """
+        for index, state in self.tab_states.items():
+            if state['path'] == path:
+                if state['modified']:
+                    state['modified'] = False
+                    self._update_tab_title(index)
+                    # 如果是当前活动标签，发出信号
+                    if index == self.tab_widget.currentIndex():
+                        self.file_modified.emit(False)
+                break
+
+    def update_file_content(self, path: str, content: str):
+        """
+        更新指定路径文件的内容（不触发修改状态）
+
+        Args:
+            path: 文件路径
+            content: 新内容
+        """
+        for index, state in self.tab_states.items():
+            if state['path'] == path:
+                editor = state['editor']
+                # 临时断开信号，避免触发修改标记
+                editor.textChanged.disconnect()
+                editor.set_code(content)
+                editor.textChanged.connect(lambda: self._on_text_changed(editor))
+                break
+
     def get_current_code(self) -> str:
         """获取当前标签的代码"""
         current_index = self.tab_widget.currentIndex()

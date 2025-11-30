@@ -1,6 +1,7 @@
 from PySide6.QtWidgets import QPlainTextEdit
 from PySide6.QtGui import QFont, QKeyEvent
 from PySide6.QtCore import Qt
+from .syntax_highlighter import PythonSyntaxHighlighter
 
 
 class CodeEditor(QPlainTextEdit):
@@ -8,13 +9,32 @@ class CodeEditor(QPlainTextEdit):
     def __init__(self, parent=None):
         super().__init__(parent)
 
-        font = QFont("Courier New", 11)
+        # 跨平台字体选择：按优先级尝试多个等宽字体
+        # macOS: SF Mono, Menlo, Monaco
+        # Windows: Consolas, Courier New
+        # Linux: DejaVu Sans Mono, Liberation Mono
+        font_families = [
+            "SF Mono",           # macOS 现代版本
+            "Menlo",             # macOS 经典字体
+            "Consolas",          # Windows 最佳字体
+            "DejaVu Sans Mono",  # Linux 常用字体
+            "Liberation Mono",   # Linux 备选字体
+            "Monaco",            # macOS 旧版本
+            "Courier New"        # 通用后备字体
+        ]
+
+        # 使用逗号分隔的字体列表，Qt会自动选择第一个可用的
+        font = QFont(", ".join(font_families), 13)
         font.setStyleHint(QFont.StyleHint.Monospace)
+        font.setWeight(QFont.Weight.Medium)  # 设置为中等粗细，更易读
         self.setFont(font)
 
         self.setPlaceholderText("MicroPython")
 
         self.setTabStopDistance(4 * self.fontMetrics().horizontalAdvance(' '))
+
+        # 添加Python语法高亮
+        self.highlighter = PythonSyntaxHighlighter(self.document())
 
     def keyPressEvent(self, event: QKeyEvent):
         """重写键盘事件，将Tab键转换为4个空格"""

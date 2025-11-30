@@ -296,13 +296,17 @@ class DeviceWorker(QObject):
                 success, content = FileManager.parse_read_file_result(output)
 
                 if success:
-                    logger.info(f"[文件读取] 成功: {path}, {len(content)} 字符")
+                    # content 是 bytes 类型，需要解码为 str
+                    content_str = content.decode('utf-8', errors='replace')
+                    logger.info(f"[文件读取] 成功: {path}, {len(content_str)} 字符")
                     self.progress.emit(f"[文件] 成功打开: {path}")
+                    self.read_file_finished.emit(success, path, content_str)
                 else:
-                    logger.error(f"[文件读取] 解析失败: {path}")
+                    # content 是错误消息，也是 bytes，需要解码
+                    error_msg = content.decode('utf-8', errors='replace')
+                    logger.error(f"[文件读取] 解析失败: {path}, 错误: {error_msg}")
                     self.progress.emit(f"[文件] 打开失败: {path}")
-
-                self.read_file_finished.emit(success, path, content)
+                    self.read_file_finished.emit(success, path, error_msg)
 
         except Exception as e:
             logger.exception(f"[文件读取] 异常: {path}")

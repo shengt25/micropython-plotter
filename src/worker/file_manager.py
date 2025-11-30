@@ -1,6 +1,6 @@
-from typing import List, Tuple
+from typing import List, Tuple, Union
 from PySide6.QtCore import QObject
-
+import binascii
 
 class FileManager(QObject):
     """MicroPython 文件系统操作辅助类"""
@@ -62,31 +62,48 @@ except Exception as e:
         """生成读取文件的 MicroPython 代码"""
         escaped_path = path.replace("'", "\\'")
 
-        code = f"""
-import sys
+        code = f"""import sys, binascii
 try:
-    with open('{escaped_path}', 'r') as f:
-        content = f.read()
     sys.stdout.write('<<<FILE_START>>>')
-    sys.stdout.write(content)
+    # 1. 使用 'rb' 读取二进制，防止换行符转换和编码错误
+    with open('{escaped_path}', 'rb') as f:
+        while True:
+            # 2. 分块读取，每次 256 字节，防止内存溢出
+            chunk = f.read(256)
+            if not chunk: 
+                break
+            # 3. 转换为 Hex 发送，防止特殊字符干扰串口，且避免分隔符冲突
+            # hexlify 返回的是 bytes，需要 decode 为 str 写入 stdout
+            sys.stdout.write(binascii.hexlify(chunk).decode())
+
     sys.stdout.write('<<<FILE_END>>>')
 except Exception as e:
-    sys.stdout.write('ERROR:' + str(e) + '\\n')
+    # 错误处理
+    sys.stdout.write('<<<ERROR>>>')
+    sys.stdout.write(str(e))
 """
         return code.strip()
 
     @staticmethod
-    def parse_read_file_result(raw_output: str) -> Tuple[bool, str]:
+    def parse_read_file_result(raw_output: str) -> Tuple[bool, Union[bytes, str]]:
         """
-        解析读取文件的结果
+        解析读取文件的结果 (支持 Hex 还原)
 
         Returns:
-            (success, content)
+            (success, content_bytes)
+            注意：成功时返回的是 bytes 类型数据，不是 str
         """
-        if 'ERROR:' in raw_output:
-            return (False, "")
+        # 1. 检查错误标记 (对应上一段代码中的 '<<<ERROR>>>')
+        if '<<<ERROR>>>' in raw_output:
+            # 你可以选择提取具体的错误信息
+            # error_msg = raw_output.split('<<<ERROR>>>')[1]
+            return (False, b"Device Error")
 
-        # 查找标记
+        # 兼容旧代码的错误标记 (以防万一)
+        if 'ERROR:' in raw_output and '<<<FILE_START>>>' not in raw_output:
+            return (False, b"Device Error")
+
+        # 2. 查找标记
         start_marker = '<<<FILE_START>>>'
         end_marker = '<<<FILE_END>>>'
 
@@ -94,29 +111,41 @@ except Exception as e:
         end_idx = raw_output.find(end_marker)
 
         if start_idx == -1 or end_idx == -1:
-            return (False, "")
+            return (False, b"Markers not found")
 
-        # 直接提取标记之间的内容，不做任何修改
-        content = raw_output[start_idx + len(start_marker):end_idx]
+        # 3. 提取 Hex 字符串
+        # 提取中间的内容，并使用 strip() 去除可能存在的首尾换行符或空白
+        hex_content = raw_output[start_idx + len(start_marker):end_idx].strip()
 
-
-        return (True, content)
+        # 4. 核心步骤：Hex -> Bytes 还原
+        try:
+            # 将十六进制字符串 (如 "616263") 转换回二进制 (如 b"abc")
+            content_bytes = binascii.unhexlify(hex_content)
+            return (True, content_bytes)
+        except binascii.Error:
+            # 如果 Hex 格式不对（比如传输丢失了字符），这里会报错
+            return (False, b"Hex Decode Error")
 
     @staticmethod
     def generate_write_file_code(path: str, content: str) -> str:
-        """生成写入文件的 MicroPython 代码"""
+        """生成写入文件的 MicroPython 代码（使用 Hex 编码传输）"""
         escaped_path = path.replace("'", "\\'")
-        # 转义内容中的特殊字符
-        escaped_content = content.replace("\\", "\\\\").replace("'", "\\'")
 
-        code = f"""
-import sys
+        # 将内容编码为 hex 字符串进行传输
+        content_bytes = content.encode('utf-8')
+        hex_content = binascii.hexlify(content_bytes).decode('ascii')
+
+        code = f"""import sys, binascii
 try:
-    with open('{escaped_path}', 'w') as f:
-        f.write('''{escaped_content}''')
-    sys.stdout.write('SUCCESS' + '\\n')
+    # 从 Hex 还原二进制数据
+    content_bytes = binascii.unhexlify('{hex_content}')
+    # 写入文件（二进制模式）
+    with open('{escaped_path}', 'wb') as f:
+        f.write(content_bytes)
+    sys.stdout.write('<<<SUCCESS>>>')
 except Exception as e:
-    sys.stdout.write('ERROR:' + str(e) + '\\n')
+    sys.stdout.write('<<<ERROR>>>')
+    sys.stdout.write(str(e))
 """
         return code.strip()
 
@@ -128,4 +157,4 @@ except Exception as e:
         Returns:
             success
         """
-        return 'SUCCESS' in raw_output and 'ERROR:' not in raw_output
+        return '<<<SUCCESS>>>' in raw_output and '<<<ERROR>>>' not in raw_output

@@ -1,0 +1,86 @@
+name: Build Binaries
+
+on:
+  push:
+    tags:
+      - 'v*'
+    branches:
+      - main
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build on ${{ matrix.os_name }} (${{ matrix.arch }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            os_name: windows
+            arch: x86_64
+            output_name: myapp.exe
+
+          - os: ubuntu-22.04
+            os_name: linux
+            arch: x86_64
+            output_name: myapp.bin
+
+          - os: macos-13
+            os_name: macos
+            arch: x86_64
+            output_name: myapp_intel
+
+          - os: macos-14
+            os_name: macos
+            arch: arm64
+            output_name: myapp_arm64
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      # 安装 uv
+      - name: Install uv
+        uses: astral-sh/setup-uv@v3
+        with:
+          enable-cache: true # 开启缓存，加快二次构建速度
+
+      # 设置 Python 版本
+      - name: Set up Python
+        run: uv python install 3.11
+
+      # 使用 uv sync 安装依赖
+      # 如果你有提交 uv.lock 文件，它会严格按照 lock 文件安装
+      # 如果没有 lock 文件，它会根据 pyproject.toml 安装
+      - name: Install Dependencies
+        run: uv sync
+
+      # Linux 必须安装 patchelf (Nuitka 需要)
+      - name: Install Linux Dependencies
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y patchelf
+
+      # 运行 Nuitka 编译
+      # 注意：直接使用 'uv run nuitka'，它会自动使用虚拟环境中的 nuitka 和库
+      # 无需手动 source .venv/bin/activate
+      - name: Build with Nuitka
+        shell: bash
+        run: |
+          uv run nuitka src/main.py \
+            --onefile \
+            --assume-yes-for-downloads \
+            --enable-plugin=pyside6 \
+            --output-filename=${{ matrix.output_name }} \
+            --no-pyi-file-info
+
+      # 上传编译产物
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: myapp-${{ matrix.os_name }}-${{ matrix.arch }}
+          path: |
+            ${{ matrix.output_name }}
+            *.app/**/*

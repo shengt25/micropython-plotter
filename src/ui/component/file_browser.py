@@ -11,6 +11,7 @@ class FileBrowser(QWidget):
     # Signals
     dir_expand_requested = Signal(str)  # 请求展开目录
     file_selected = Signal(str)         # 文件被选中（可选）
+    file_open_requested = Signal(str)   # 请求打开文件（双击文件）
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -27,6 +28,7 @@ class FileBrowser(QWidget):
         self.tree = QTreeWidget()
         self.tree.setHeaderLabel("文件浏览器")
         self.tree.itemExpanded.connect(self._on_item_expanded)
+        self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
         layout.addWidget(self.tree)
 
         # 占位文本
@@ -112,3 +114,18 @@ class FileBrowser(QWidget):
         # 检查是否已加载（子节点是占位符）
         if item.childCount() > 0 and item.child(0).isDisabled():
             self.dir_expand_requested.emit(path)
+
+    def _on_item_double_clicked(self, item: QTreeWidgetItem, column: int):
+        """节点双击事件"""
+        path = item.data(0, Qt.ItemDataRole.UserRole)
+        is_dir = item.data(0, Qt.ItemDataRole.UserRole + 1)
+
+        if is_dir:
+            # 双击目录：展开/折叠
+            if item.isExpanded():
+                item.setExpanded(False)
+            else:
+                item.setExpanded(True)
+        else:
+            # 双击文件：发出打开请求
+            self.file_open_requested.emit(path)

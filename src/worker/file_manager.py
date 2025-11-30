@@ -55,3 +55,79 @@ except Exception as e:
                 items.append((name, is_dir))
 
         return (True, items)
+
+    @staticmethod
+    def generate_read_file_code(path: str) -> str:
+        """生成读取文件的 MicroPython 代码"""
+        escaped_path = path.replace("'", "\\'")
+
+        code = f"""
+try:
+    with open('{escaped_path}', 'r') as f:
+        content = f.read()
+    print('<<<FILE_START>>>')
+    print(content, end='')
+    print('<<<FILE_END>>>')
+except Exception as e:
+    print('ERROR:' + str(e))
+"""
+        return code.strip()
+
+    @staticmethod
+    def parse_read_file_result(raw_output: str) -> Tuple[bool, str]:
+        """
+        解析读取文件的结果
+
+        Returns:
+            (success, content)
+        """
+        if 'ERROR:' in raw_output:
+            return (False, "")
+
+        # 查找标记
+        start_marker = '<<<FILE_START>>>'
+        end_marker = '<<<FILE_END>>>'
+
+        start_idx = raw_output.find(start_marker)
+        end_idx = raw_output.find(end_marker)
+
+        if start_idx == -1 or end_idx == -1:
+            return (False, "")
+
+        # 提取内容（去除标记）
+        content = raw_output[start_idx + len(start_marker):end_idx]
+
+        # 去除首尾的换行符（标记后的换行）
+        if content.startswith('\n'):
+            content = content[1:]
+        if content.endswith('\n'):
+            content = content[:-1]
+
+        return (True, content)
+
+    @staticmethod
+    def generate_write_file_code(path: str, content: str) -> str:
+        """生成写入文件的 MicroPython 代码"""
+        escaped_path = path.replace("'", "\\'")
+        # 转义内容中的特殊字符
+        escaped_content = content.replace("\\", "\\\\").replace("'", "\\'")
+
+        code = f"""
+try:
+    with open('{escaped_path}', 'w') as f:
+        f.write('''{escaped_content}''')
+    print('SUCCESS')
+except Exception as e:
+    print('ERROR:' + str(e))
+"""
+        return code.strip()
+
+    @staticmethod
+    def parse_write_file_result(raw_output: str) -> bool:
+        """
+        解析写入文件的结果
+
+        Returns:
+            success
+        """
+        return 'SUCCESS' in raw_output and 'ERROR:' not in raw_output

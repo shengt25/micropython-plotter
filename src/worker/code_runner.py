@@ -52,7 +52,7 @@ class CodeRunner(QObject):
 
     def run_code(self, code: str) -> bool:
         """
-        直接执行代码字符串（假设已连接且处于 Raw REPL）
+        直接执行代码字符串，读取完整输出避免缓冲区污染
 
         Args:
             code: Python 代码
@@ -60,41 +60,95 @@ class CodeRunner(QObject):
         Returns:
             是否成功执行
         """
+        from utils.logger import setup_logger
+
+        logger = setup_logger(__name__)
+
         try:
             # 发送代码
             self.dm.serial.write(code.encode('utf-8'))
             self.dm.serial.write(b'\x04')  # Ctrl+D 执行
+
+            logger.debug("[代码运行] 已发送代码和 Ctrl+D")
 
             # 读取确认
             response = self.dm.serial.read_until(b'OK')
 
             if b'OK' not in response:
                 error_msg = response.decode('utf-8', errors='replace')
+                logger.error(f"[代码运行] 确认失败: {error_msg[:100]}")
                 self.error_received.emit(f"执行失败: {error_msg}")
                 return False
 
-            self.output_received.emit(f"[CodeRunner] 代码已执行")
+            logger.debug("[代码运行] 收到 OK 确认")
+
+            # 读取代码的完整输出，清空缓冲区
+            try:
+                output = self.dm.serial.read_until(b'\x04\x04')
+                output_str = output.decode('utf-8', errors='replace')
+
+                logger.debug(f"[代码运行] 接收到 {len(output)} 字节输出")
+
+                if output_str.strip():
+                    self.output_received.emit(output_str)
+
+            except Exception as e:
+                # 超时不影响返回值，但至少尝试清空了缓冲区
+                logger.warning(f"[代码运行] 读取输出超时: {e}")
+                self.error_received.emit(f"读取输出超时: {e}")
+
+            logger.info("[代码运行] 代码执行完成")
             return True
 
         except Exception as e:
+            logger.exception(f"[代码运行] 执行异常")
             self.error_received.emit(f"执行异常: {e}")
             return False
 
     def stop(self) -> bool:
         """
-        停止当前运行的程序（发送 Ctrl+C 并重新进入 Raw REPL）
+        停止代码执行并软重启 REPL
 
         Returns:
-            是否成功停止
+            True 如果停止成功，False 如果失败
         """
-        success = self.dm.force_stop()
+        from utils.logger import setup_logger
 
-        if success:
-            self.output_received.emit("[CodeRunner] 程序已停止")
-        else:
-            self.error_received.emit("[CodeRunner] 停止失败")
+        logger = setup_logger(__name__)
 
-        return success
+        logger.info("[停止代码] 开始执行停止操作")
+
+        try:
+            with self.dm.lock:
+                # 1. 发送 Ctrl+C（多次，确保中断）
+                for i in range(3):
+                    self.dm.serial.write(b'\x03')  # Ctrl+C
+                    logger.debug(f"[停止代码] 发送 Ctrl+C (尝试 {i+1}/3)")
+                    time.sleep(0.1)
+
+                # 2. 清空缓冲区
+                try:
+                    self.dm.serial.reset_input_buffer()
+                    logger.debug("[停止代码] 已清空输入缓冲区")
+                except:
+                    pass
+
+                # 3. 重新进入 Raw REPL
+                success = self.dm._enter_raw_mode()
+
+                if success:
+                    logger.info("[停止代码] 软重启成功，REPL 就绪")
+                    self.output_received.emit("[系统] 程序已停止")
+                    return True
+                else:
+                    logger.warning("[停止代码] 软重启失败")
+                    self.error_received.emit("[系统] 停止失败")
+                    return False
+
+        except Exception as e:
+            logger.exception(f"[停止代码] 异常")
+            self.error_received.emit(f"[系统] 停止异常: {e}")
+            return False
 
     # def soft_reset(self) -> bool:
     #     """

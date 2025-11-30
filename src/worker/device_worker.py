@@ -15,6 +15,8 @@ class DeviceWorker(QObject):
     stop_requested = Signal()           # 请求停止代码
     disconnect_requested = Signal()     # 请求断开连接
     list_dir_requested = Signal(str)    # 请求列出目录
+    read_file_requested = Signal(str)   # 请求读取文件
+    write_file_requested = Signal(str, str)  # 请求写入文件 (path, content)
 
     # Signals - 操作完成信号
     initialized = Signal()              # Worker 初始化完成
@@ -23,6 +25,8 @@ class DeviceWorker(QObject):
     run_finished = Signal(bool)         # 运行完成 (成功/失败)
     stop_finished = Signal(bool)        # 停止完成 (成功/失败)
     list_dir_finished = Signal(bool, str, list)  # 列出目录完成 (success, path, items)
+    read_file_finished = Signal(bool, str, str)  # 读取文件完成 (success, path, content)
+    write_file_finished = Signal(bool, str)      # 写入文件完成 (success, path)
 
     # Signals - 进度信息
     progress = Signal(str)              # 进度消息（显示在输出控制台）
@@ -160,9 +164,13 @@ class DeviceWorker(QObject):
     def do_list_dir(self, path: str):
         """列出目录内容（在 Worker 线程执行）"""
         from .file_manager import FileManager
+        from utils.logger import setup_logger
+
+        logger = setup_logger(__name__)
 
         # 1. 检查连接
         if not self.device_manager.is_connected():
+            logger.warning("[文件浏览器] 设备未连接")
             self.progress.emit("[文件浏览器] 设备未连接")
             self.list_dir_finished.emit(False, path, [])
             return
@@ -170,15 +178,27 @@ class DeviceWorker(QObject):
         # 2. 生成 MicroPython 代码
         code = FileManager.generate_list_dir_code(path)
 
+        logger.debug(f"[文件浏览器] 准备列出目录: {path}")
+
         try:
             with self.device_manager.lock:
+                # 清空缓冲区
+                try:
+                    self.device_manager.serial.reset_input_buffer()
+                    logger.debug("[文件浏览器] 已清空输入缓冲区")
+                except:
+                    pass
+
                 # 3. 发送代码
                 self.device_manager.serial.write(code.encode('utf-8'))
                 self.device_manager.serial.write(b'\x04')  # Ctrl+D 执行
 
+                logger.debug(f"[文件浏览器] 已发送列出目录命令")
+
                 # 4. 读取确认
                 response = self.device_manager.serial.read_until(b'OK')
                 if b'OK' not in response:
+                    logger.warning(f"[文件浏览器] 未收到确认: {path}")
                     self.list_dir_finished.emit(False, path, [])
                     return
 
@@ -186,10 +206,183 @@ class DeviceWorker(QObject):
                 output_bytes = self.device_manager.serial.read_until(b'\x04\x04')
                 output = output_bytes.decode('utf-8', errors='replace')
 
+                logger.debug(f"[文件浏览器] 接收到输出: {len(output)} 字符")
+
                 # 6. 解析结果
                 success, items = FileManager.parse_list_dir_result(output)
+
+                if success:
+                    logger.info(f"[文件浏览器] 成功列出目录: {path}, {len(items)} 项")
+                else:
+                    logger.error(f"[文件浏览器] 解析失败: {path}")
+
                 self.list_dir_finished.emit(success, path, items)
 
         except Exception as e:
+            logger.exception(f"[文件浏览器] 异常: {path}")
             self.progress.emit(f"[文件浏览器] 列出目录失败: {e}")
             self.list_dir_finished.emit(False, path, [])
+
+    @Slot(str)
+    def do_read_file(self, path: str):
+        """读取文件内容（在 Worker 线程执行）"""
+        from .file_manager import FileManager
+        from utils.logger import setup_logger
+
+        logger = setup_logger(__name__)
+
+        # 1. 检查连接
+        if not self.device_manager.is_connected():
+            logger.warning("[文件读取] 设备未连接")
+            self.progress.emit("[文件] 设备未连接，正在尝试重新连接...")
+            self.read_file_finished.emit(False, path, "")
+            return
+
+        # 2. 生成 MicroPython 代码
+        code = FileManager.generate_read_file_code(path)
+
+        logger.debug(f"[文件读取] 准备读取文件: {path}")
+
+        try:
+            with self.device_manager.lock:
+                # 清空缓冲区
+                try:
+                    self.device_manager.serial.reset_input_buffer()
+                    logger.debug("[文件读取] 已清空输入缓冲区")
+                except Exception as e:
+                    logger.error(f"[文件读取] 清空缓冲区失败: {e}")
+
+                # 3. 发送代码
+                self.device_manager.serial.write(code.encode('utf-8'))
+                self.device_manager.serial.write(b'\x04')  # Ctrl+D 执行
+
+                logger.debug(f"[文件读取] 已发送读取命令")
+
+                # 4. 读取确认（设置较短超时检测设备忙碌）
+                try:
+                    response = self.device_manager.serial.read_until(b'OK', timeout=2)
+
+                    if b'OK' not in response:
+                        logger.warning(f"[文件读取] 设备无响应或忙碌，响应: {response[:50]}")
+
+                        # 友好提示用户
+                        self.progress.emit("[文件] 设备忙碌或无响应")
+                        self.progress.emit("[提示] 如果设备正在执行代码，请点击 Stop 按钮停止")
+
+                        self.read_file_finished.emit(False, path, "")
+                        return
+
+                except Exception as e:
+                    logger.error(f"[文件读取] 读取确认超时: {e}")
+
+                    # 友好提示用户
+                    self.progress.emit("[文件] 设备响应超时")
+                    self.progress.emit("[提示] 请点击 Stop 按钮停止当前操作，或检查设备连接")
+
+                    self.read_file_finished.emit(False, path, "")
+                    return
+
+                # 5. 读取输出
+                output_bytes = self.device_manager.serial.read_until(b'\x04\x04', timeout=5)
+                output = output_bytes.decode('utf-8', errors='replace')
+
+                logger.debug(f"[文件读取] 接收到 {len(output)} 字符")
+
+                # 6. 解析结果
+                success, content = FileManager.parse_read_file_result(output)
+
+                if success:
+                    logger.info(f"[文件读取] 成功: {path}, {len(content)} 字符")
+                    self.progress.emit(f"[文件] 成功打开: {path}")
+                else:
+                    logger.error(f"[文件读取] 解析失败: {path}")
+                    self.progress.emit(f"[文件] 打开失败: {path}")
+
+                self.read_file_finished.emit(success, path, content)
+
+        except Exception as e:
+            logger.exception(f"[文件读取] 异常: {path}")
+            self.progress.emit(f"[文件] 读取失败: {e}")
+            self.read_file_finished.emit(False, path, "")
+
+    @Slot(str, str)
+    def do_write_file(self, path: str, content: str):
+        """写入文件内容（在 Worker 线程执行）"""
+        from .file_manager import FileManager
+        from utils.logger import setup_logger
+
+        logger = setup_logger(__name__)
+
+        # 1. 检查连接
+        if not self.device_manager.is_connected():
+            logger.warning("[文件写入] 设备未连接")
+            self.progress.emit("[文件] 设备未连接")
+            self.write_file_finished.emit(False, path)
+            return
+
+        # 2. 生成 MicroPython 代码
+        code = FileManager.generate_write_file_code(path, content)
+
+        logger.debug(f"[文件写入] 准备写入文件: {path}, {len(content)} 字符")
+
+        try:
+            with self.device_manager.lock:
+                # 清空缓冲区
+                try:
+                    self.device_manager.serial.reset_input_buffer()
+                    logger.debug("[文件写入] 已清空输入缓冲区")
+                except Exception as e:
+                    logger.error(f"[文件写入] 清空缓冲区失败: {e}")
+
+                # 3. 发送代码
+                self.device_manager.serial.write(code.encode('utf-8'))
+                self.device_manager.serial.write(b'\x04')  # Ctrl+D 执行
+
+                logger.debug(f"[文件写入] 已发送写入命令")
+
+                # 4. 读取确认（设置较短超时检测设备忙碌）
+                try:
+                    response = self.device_manager.serial.read_until(b'OK', timeout=2)
+
+                    if b'OK' not in response:
+                        logger.warning(f"[文件写入] 设备无响应或忙碌")
+
+                        # 友好提示用户
+                        self.progress.emit("[文件] 设备忙碌或无响应")
+                        self.progress.emit("[提示] 如果设备正在执行代码，请点击 Stop 按钮停止")
+
+                        self.write_file_finished.emit(False, path)
+                        return
+
+                except Exception as e:
+                    logger.error(f"[文件写入] 读取确认超时: {e}")
+
+                    # 友好提示用户
+                    self.progress.emit("[文件] 设备响应超时")
+                    self.progress.emit("[提示] 请点击 Stop 按钮停止当前操作，或检查设备连接")
+
+                    self.write_file_finished.emit(False, path)
+                    return
+
+                # 5. 读取输出
+                output_bytes = self.device_manager.serial.read_until(b'\x04\x04', timeout=5)
+                output = output_bytes.decode('utf-8', errors='replace')
+
+                logger.debug(f"[文件写入] 接收到响应: {len(output)} 字符")
+
+                # 6. 解析结果
+                success = FileManager.parse_write_file_result(output)
+
+                if success:
+                    logger.info(f"[文件写入] 成功: {path}")
+                    self.progress.emit(f"[文件] 成功保存: {path}")
+                else:
+                    logger.error(f"[文件写入] 失败: {path}")
+                    self.progress.emit(f"[文件] 保存失败: {path}")
+
+                self.write_file_finished.emit(success, path)
+
+        except Exception as e:
+            logger.exception(f"[文件写入] 异常: {path}")
+            self.progress.emit(f"[文件] 写入失败: {e}")
+            self.write_file_finished.emit(False, path)

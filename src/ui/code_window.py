@@ -1,7 +1,7 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QSplitter, QStatusBar
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QSplitter, QStatusBar, QMessageBox
 from PySide6.QtCore import Qt, QThread
 from .component.toolbar import CodeToolBar
-from .component.code_editor import CodeEditor
+from .component.tab_editor import TabEditorWidget
 from .component.output_console import OutputConsole
 from .component.file_browser import FileBrowser
 from worker.device_worker import DeviceWorker
@@ -37,18 +37,18 @@ class CodeWindow(QMainWindow):
         # 创建文件浏览器
         self.file_browser = FileBrowser()
 
-        # 创建代码编辑器
-        self.code_editor = CodeEditor()
+        # 创建多标签代码编辑器
+        self.tab_editor = TabEditorWidget()
 
         # 创建输出控制台
         self.output_console = OutputConsole()
 
         # 右侧垂直分割器：代码编辑器 + 输出控制台
         right_splitter = QSplitter(Qt.Orientation.Vertical)
-        right_splitter.addWidget(self.code_editor)
+        right_splitter.addWidget(self.tab_editor)
         right_splitter.addWidget(self.output_console)
-        right_splitter.setStretchFactor(0, 6)
-        right_splitter.setStretchFactor(1, 4)
+        right_splitter.setStretchFactor(0, 7)
+        right_splitter.setStretchFactor(1, 3)
 
         # 主水平分割器：文件浏览器 + 右侧
         main_splitter = QSplitter(Qt.Orientation.Horizontal)
@@ -91,6 +91,8 @@ class CodeWindow(QMainWindow):
         self.worker.stop_requested.connect(self.worker.do_stop)
         self.worker.disconnect_requested.connect(self.worker.do_disconnect)
         self.worker.list_dir_requested.connect(self.worker.do_list_dir)
+        self.worker.read_file_requested.connect(self.worker.do_read_file)
+        self.worker.write_file_requested.connect(self.worker.do_write_file)
 
         # 启动线程
         self.worker_thread.start()
@@ -100,6 +102,7 @@ class CodeWindow(QMainWindow):
         # 工具栏按钮 -> Worker 操作
         self.toolbar.run_clicked.connect(self.on_run_code)
         self.toolbar.stop_clicked.connect(self.on_stop_code)
+        self.toolbar.save_clicked.connect(self.on_save_file)
 
         # Worker 初始化完成 -> 自动连接设备
         self.worker.initialized.connect(self._connect_device)
@@ -119,9 +122,18 @@ class CodeWindow(QMainWindow):
 
         # 文件浏览器 -> Worker
         self.file_browser.dir_expand_requested.connect(self.worker.list_dir_requested.emit)
+        self.file_browser.file_open_requested.connect(self.on_file_open_requested)
 
         # Worker -> 文件浏览器
         self.worker.list_dir_finished.connect(self.on_list_dir_finished)
+
+        # Worker -> 文件操作
+        self.worker.read_file_finished.connect(self.on_read_file_finished)
+        self.worker.write_file_finished.connect(self.on_write_file_finished)
+
+        # TabEditor -> UI
+        self.tab_editor.file_modified.connect(self.on_file_modified)
+        self.tab_editor.active_file_changed.connect(self.on_active_file_changed)
 
     def _connect_device(self):
         """连接设备"""
@@ -130,7 +142,17 @@ class CodeWindow(QMainWindow):
 
     def on_run_code(self):
         """运行代码按钮处理"""
-        code = self.code_editor.get_code().strip()
+        # 1. 先检查当前文件是否需要保存
+        path, content, modified = self.tab_editor.get_current_file_info()
+        if path and modified:
+            # 自动保存
+            self.output_console.append_info("[系统] 自动保存文件...")
+            self.worker.write_file_requested.emit(path, content)
+            # 标记为已保存
+            self.tab_editor.mark_current_saved()
+
+        # 2. 获取代码
+        code = self.tab_editor.get_current_code().strip()
 
         if not code:
             self.output_console.append_error("[错误] 代码为空")
@@ -153,7 +175,6 @@ class CodeWindow(QMainWindow):
 
     def on_connect_finished(self, success):
         """连接完成处理"""
-        # 连接成功后初始化文件浏览器
         if success:
             self.file_browser.initialize_root()
         else:
@@ -166,15 +187,89 @@ class CodeWindow(QMainWindow):
 
     def on_stop_finished(self, success):
         """停止完成处理"""
-        # 恢复按钮状态
         self.set_buttons_enabled(True)
+
+        if success:
+            self.file_browser.initialize_root()
+            return
+
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Icon.Warning)
+        msg_box.setWindowTitle("设备无响应")
+        msg_box.setText("无法停止设备或软重启失败")
+        msg_box.setInformativeText(
+            "请尝试以下操作：\n"
+            "1. 按下设备上的 RESET 按钮\n"
+            "2. 或者拔插 USB 线重新连接\n"
+            "3. 然后重启应用程序"
+        )
+        msg_box.setStandardButtons(QMessageBox.StandardButton.Ok)
+        msg_box.exec()
 
     def on_list_dir_finished(self, success: bool, path: str, items: list):
         """目录列出完成处理"""
         if success:
             self.file_browser.populate_directory(path, items)
+            return
+
+        self.file_browser.show_error(f"[文件浏览器] 无法列出目录: {path}")
+        self.output_console.append_error(f"[文件浏览器] 无法列出目录: {path}")
+
+    def on_file_open_requested(self, path: str):
+        """文件打开请求处理（双击文件）"""
+        self.output_console.append_info(f"[文件] 正在打开: {path}")
+        # 触发 Worker 读取文件
+        self.worker.read_file_requested.emit(path)
+
+    def on_read_file_finished(self, success: bool, path: str, content: str):
+        """文件读取完成处理"""
+        if success:
+            # 在新标签中打开文件
+            self.tab_editor.open_file(path, content)
+            self.output_console.append_info(f"[文件] 成功打开: {path}")
         else:
-            self.output_console.append_error(f"[文件浏览器] 无法列出目录: {path}")
+            self.output_console.append_error(f"[文件] 打开失败: {path}")
+
+    def on_save_file(self):
+        """保存文件按钮处理"""
+        path, content, modified = self.tab_editor.get_current_file_info()
+
+        if not path:
+            self.output_console.append_error("[文件] 当前标签没有关联文件")
+            return
+
+        if not modified:
+            self.output_console.append_info("[文件] 文件未修改，无需保存")
+            return
+
+        # 触发 Worker 写入文件
+        self.output_console.append_info(f"[文件] 正在保存: {path}")
+        self.worker.write_file_requested.emit(path, content)
+
+        # 标记为已保存
+        self.tab_editor.mark_current_saved()
+
+    def on_write_file_finished(self, success: bool, path: str):
+        """文件写入完成处理"""
+        if not success:
+            self.output_console.append_error(f"[文件] 保存失败: {path}")
+
+    def on_file_modified(self, modified: bool):
+        """文件修改状态改变处理"""
+        # 更新保存按钮状态
+        self.toolbar.save_action.setEnabled(modified)
+
+    def on_active_file_changed(self, path: str):
+        """活动文件改变处理"""
+        # 更新状态栏
+        if path:
+            self.status_bar.showMessage(f"当前文件: {path}")
+        else:
+            self.status_bar.showMessage("就绪")
+
+        # 更新保存按钮状态
+        _, _, modified = self.tab_editor.get_current_file_info()
+        self.toolbar.save_action.setEnabled(modified)
 
     def set_buttons_enabled(self, enabled: bool):
         """设置按钮启用/禁用状态"""

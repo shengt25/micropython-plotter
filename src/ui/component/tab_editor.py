@@ -127,7 +127,7 @@ class TabEditorWidget(QWidget):
 
     def update_file_content(self, path: str, content: str):
         """
-        更新指定路径文件的内容（不触发修改状态）
+        更新指定路径文件的内容（不触发修改状态），并切换到该标签
 
         Args:
             path: 文件路径
@@ -140,6 +140,8 @@ class TabEditorWidget(QWidget):
                 editor.textChanged.disconnect()
                 editor.set_code(content)
                 editor.textChanged.connect(lambda: self._on_text_changed(editor))
+                # 切换到该标签页
+                self.tab_widget.setCurrentIndex(index)
                 break
 
     def get_current_code(self) -> str:

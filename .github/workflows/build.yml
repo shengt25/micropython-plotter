@@ -23,22 +23,22 @@ jobs:
           - os: windows-latest
             os_name: windows
             arch: x86_64
-            output_name: micropython-plotter.exe
+            output_name: micropython-plotter_windows_x64.exe
 
           - os: ubuntu-22.04
             os_name: linux
             arch: x86_64
-            output_name: micropython-plotter.bin
+            output_name: micropython-plotter_linux_x64.bin
 
-          - os: macos-13
+          - os: macos-15-intel
             os_name: macos
             arch: x86_64
-            output_name: micropython-plotter_intel
+            output_name: micropython-plotter_macos_intel
 
-          - os: macos-14
+          - os: macos-15
             os_name: macos
             arch: arm64
-            output_name: micropython-plotter_arm64
+            output_name: micropython-plotter_macos_arm64
 
     steps:
       - name: Checkout Code
@@ -68,9 +68,9 @@ jobs:
         run: |
           ICON_ARG=""
           if [ "$RUNNER_OS" == "Windows" ]; then
-            ICON_ARG="--windows-icon-from-ico=assets/icon.ico"
+            ICON_ARG="--windows-icon-from-ico=assets/micropython-plotter.ico"
           elif [ "$RUNNER_OS" == "macOS" ]; then
-            ICON_ARG="--macos-app-icon=assets/icon.icns"
+            ICON_ARG="--macos-app-icon=assets/micropython-plotter.icns"
           fi
           
           uv run nuitka src/main.py \
@@ -80,16 +80,18 @@ jobs:
             --output-filename=${{ matrix.output_name }} \
             $ICON_ARG
 
-      # 依然保留这个，方便在 Actions 页面查错或手动下载
+      # 上传构建产物 (Run Summary 页面)
       - name: Upload Artifact
         uses: actions/upload-artifact@v4
         with:
-          name: micropython-plotter-${{ matrix.os_name }}-${{ matrix.arch }}
+          # 这里的 name 是你在 Actions 网页上看到的压缩包名字
+          name: ${{ matrix.output_name }}
+          # 这里的 path 必须匹配上面定义的 output_name
           path: ${{ matrix.output_name }}
 
-      # 新增：发布到 Releases 页面
+      # 发布到 Releases 页面
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
-        if: startsWith(github.ref, 'refs/tags/') # 只有打 tag 时才执行
+        if: startsWith(github.ref, 'refs/tags/')
         with:
           files: ${{ matrix.output_name }}

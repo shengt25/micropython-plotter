@@ -71,7 +71,7 @@ Using the plotter is very easy.
 - **Limit:** You can plot a maximum of 5 variables at the same time.
 - **Visualizing:** Open the micropython-plotter software to see your graphs in real-time using `Plot` tool.
 
-
+- **On macOS**: You might receive a warning about the application and can't open it, open the `terminal` and run `xattr -d com.apple.quarantine <path-to-micropython-plotter>`, change the path to your actual path and name such as `micropython-plotter_macos_arm64.app`
 
 ### About `print()`
 

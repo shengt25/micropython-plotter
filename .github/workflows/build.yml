@@ -69,18 +69,30 @@ jobs:
       - name: Build with Nuitka
         shell: bash
         run: |
-          MODE_ARG="--onefile"
+          # 1. 定义基础变量
+          MODE_ARG=""
           EXTRA_ARGS=""
           
           if [ "$RUNNER_OS" == "Windows" ]; then
+            # Windows: 使用单文件模式 (方便分发)
+            # 开启 --windows-disable-console 隐藏黑框
+            MODE_ARG="--onefile"
             EXTRA_ARGS="--windows-disable-console --windows-icon-from-ico=assets/micropython-plotter.ico"
           
+          elif [ "$RUNNER_OS" == "Linux" ]; then
+             # Linux: 使用单文件模式
+             MODE_ARG="--onefile"
+          
           elif [ "$RUNNER_OS" == "macOS" ]; then
+            # macOS: 使用独立模式 (因为 .app 本身就是文件夹，不需要再打包成单文件，这样启动更快)
+            # 开启 --macos-create-app-bundle 生成 .app 包
+            MODE_ARG="--standalone"
             EXTRA_ARGS="--macos-create-app-bundle --macos-app-icon=assets/micropython-plotter.icns"
           fi
           
-          echo "Building with args: $MODE_ARG $EXTRA_ARGS"
+          echo "Building for $RUNNER_OS with args: $MODE_ARG $EXTRA_ARGS"
 
+          # 2. 运行编译
           uv run nuitka src/main.py \
             $MODE_ARG \
             --assume-yes-for-downloads \

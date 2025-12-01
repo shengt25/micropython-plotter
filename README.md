@@ -26,36 +26,44 @@ Using the plotter is very easy.
 
 1. Import the library in the file you want to use
 
-```
-from mp_plotter import plotter
-```
+   ```python
+   from mp_plotter import plotter
+   ```
 
-2. Call `plotter.plot()` to plot.
+2. Call `plotter.plot()` to plot. It should be called at only one place, otherwise the computer side will confuse about the data. Of course it can be in the loop, but only at one place. 
 
-Here is a simple example:
+   A correct example:
 
-```Python
-import time
-from mp_plotter import plotter  # Import the library
+   ```python
+   import time
+   from mp_plotter import plotter
+   
+   value1 = 0
+   value2 = 0
+   plotter.plot(value1, value2)
+   
+   for i in range (10000):
+   	plotter.plot(i, 2i, 3i)
+     time.sleep(0.05)
+   ```
 
-# Main loop
-while True:
-    value1 = 100
-    value2 = 255
-    
-    # Send data to the plotter
-    # You can send between 1 to 5 variables at once
-    # in the current version, they should be int and positive
-    # such as two int
-    plotter.plot(value1, value2)
-    
-    # maximum 5 variables
-    # plotter.plot(value1, value2, value3, value4, value5)
-    
-    time.sleep(0.05)
-```
+   But not:
 
+   ```python
+   from mp_plotter import plotter
+   
+   value1 = 0
+   value2 = 0
+   plotter.plot(value1, value2)
+   
+   for i in range(10000):
+     plotter.plot(i, 2i, 3i)
+   	for j in range(100):
+     	plotter.plot(j)	# two plotter calls, which will mess up the data sent to computer
+   		time.sleep(0.05)
+   ```
 
+   
 
 ### Notes
 
@@ -71,4 +79,4 @@ To make the plotting fast and smooth, this library **disables the standard Pytho
 
 - **If you use `print()`:** Nothing will happen.
 - **If you need to debug text:** Use `plotter.print("hello")` instead.
-- **If you want to enable the original print():** You can manually turn it back on by running `plotter.restore_print()`.
+- **If you want to enable the original print():** You can turn it back on by running `plotter.restore_print()` anytime after importing the library.

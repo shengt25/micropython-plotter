@@ -156,6 +156,7 @@ class CodeWindow(QMainWindow):
 
         # 绘图数据 -> 转发到绘图窗口
         self.worker.plot_data_received.connect(self._forward_plot_data)
+        self.worker.plot_config_received.connect(self._forward_plot_config)
 
         # 初始化时扫描一次串口但暂不立即连接（等待 Worker 就绪）
         self.refresh_ports(auto_connect=True)
@@ -391,6 +392,11 @@ class CodeWindow(QMainWindow):
         """
         if self.plotter_window and self.plotter_window.isVisible():
             self.plotter_window.on_plot_data_received(values)
+
+    def _forward_plot_config(self, names: list):
+        """接收到通道配置后更新绘图窗口的图例名称"""
+        if self.plotter_window and self.plotter_window.isVisible():
+            self.plotter_window.on_plot_config_received(names)
 
     def closeEvent(self, event):
         """窗口关闭事件"""

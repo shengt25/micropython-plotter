@@ -2,7 +2,7 @@ import time
 from collections import deque
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel,
-    QLineEdit, QPushButton, QDialog, QFormLayout, QDialogButtonBox,
+    QPushButton, QDialog, QFormLayout, QDialogButtonBox,
     QColorDialog, QComboBox
 )
 from PySide6.QtCore import Signal, Slot, QTimer, Qt
@@ -147,7 +147,8 @@ class PlotterWindow(QWidget):
         self.current_display_percentage = 0.50  # Default 50%
 
         # UI components (will be created in _setup_ui)
-        self.channel_name_inputs = []
+        self.channel_names = self.default_labels.copy()
+        self.active_channel_count = len(self.default_labels)
         self.curves = []
         self.stats_text = None
         self.ui_timer = None
@@ -207,10 +208,10 @@ class PlotterWindow(QWidget):
 
         # Create 5 curves
         self.curves = []
-        for i in range(5):
+        for i in range(self.active_channel_count):
             curve = self.plot.plot(
                 pen=pg.mkPen(self.curve_colors[i], width=2),
-                name=self.default_labels[i],
+                name=self.channel_names[i],
                 skipFiniteCheck=True
             )
             self.curves.append(curve)
@@ -233,18 +234,6 @@ class PlotterWindow(QWidget):
         title_label = QLabel("Channel Settings")
         title_label.setStyleSheet("font-weight: bold; font-size: 14px;")
         layout.addWidget(title_label)
-
-        # Channel name inputs
-        layout.addWidget(QLabel("Channel Names:"))
-        for i in range(5):
-            name_input = QLineEdit(self.default_labels[i])
-            name_input.textChanged.connect(
-                lambda text, idx=i: self._update_curve_name(idx, text)
-            )
-            self.channel_name_inputs.append(name_input)
-            layout.addWidget(name_input)
-
-        layout.addSpacing(20)
 
         # Color settings button
         color_button = QPushButton("Color Settings...")
@@ -302,9 +291,11 @@ class PlotterWindow(QWidget):
         self.curves.clear()
 
         # Recreate all curves in order (0 to 4)
-        for i in range(5):
-            # Get current name from text input
-            current_name = self.channel_name_inputs[i].text() or f"Channel {i + 1}"
+        target_count = max(0, min(self.active_channel_count, len(self.curve_colors)))
+        for i in range(target_count):
+            current_name = self.channel_names[i] if i < len(self.channel_names) else f"Channel {i + 1}"
+            if not current_name:
+                current_name = f"Channel {i + 1}"
 
             # Create new curve
             curve = self.plot.plot(
@@ -313,13 +304,6 @@ class PlotterWindow(QWidget):
                 skipFiniteCheck=True
             )
             self.curves.append(curve)
-
-    @Slot(int, str)
-    def _update_curve_name(self, index, name):
-        """Update the legend name for a curve"""
-        if 0 <= index < len(self.curves):
-            # Update all curves to maintain correct order
-            self._update_legend()
 
     @Slot(int)
     def _on_refresh_rate_changed(self, index):
@@ -371,6 +355,26 @@ class PlotterWindow(QWidget):
         self.graphics_widget.setBackground(bg_color)
 
         # Recreate all curves with new colors
+        self._update_legend()
+
+    @Slot(list)
+    def on_plot_config_received(self, names: list):
+        """Update channel names from device configuration packets"""
+        if not names:
+            return
+
+        count = min(len(names), len(self.default_labels))
+        if count == 0:
+            return
+
+        self.active_channel_count = count
+        new_names = self.channel_names[:]
+        for i in range(count):
+            new_names[i] = names[i] or self.default_labels[i]
+        for i in range(count, len(self.default_labels)):
+            new_names[i] = self.default_labels[i]
+
+        self.channel_names = new_names
         self._update_legend()
 
     @Slot(list)

@@ -42,6 +42,7 @@ class DeviceWorker(QObject):
 
     # Signals - 绘图数据
     plot_data_received = Signal(list)  # 绘图数据包
+    plot_config_received = Signal(list)  # 绘图通道配置
 
     # Signals - 端口变化
     port_changed = Signal(str)
@@ -76,6 +77,7 @@ class DeviceWorker(QObject):
 
         # 连接 PlotStreamHandler 的 Signals
         self.plot_handler.plot_data_received.connect(self.plot_data_received.emit)
+        self.plot_handler.plot_config_received.connect(self.plot_config_received.emit)
         self.plot_handler.text_data_received.connect(self.output_received.emit)
 
         # 创建后台监控定时器
@@ -142,6 +144,8 @@ class DeviceWorker(QObject):
         self.progress.emit("\n[Info] Running code...")
         self.progress.emit("-" * 50)
         self.status_changed.emit("Running...")
+        if self.plot_handler:
+            self.plot_handler.reset_config_state()
 
         success = self.code_runner.run_code(code)
 
@@ -465,6 +469,8 @@ class DeviceWorker(QObject):
         if self.plot_handler:
             # 清空缓冲区，避免残留数据
             self.plot_handler.buffer.clear()
+            if enabled:
+                self.plot_handler.reset_config_state()
 
     def _monitor_serial_output(self):
         """

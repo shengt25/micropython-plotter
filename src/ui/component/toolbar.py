@@ -14,6 +14,7 @@ class PortComboBox(QComboBox):
 class CodeToolBar(QToolBar):
 
     # Signals
+    new_clicked = Signal()
     run_clicked = Signal()
     stop_clicked = Signal()
     save_clicked = Signal()
@@ -24,6 +25,7 @@ class CodeToolBar(QToolBar):
     def __init__(self, parent=None):
         super().__init__("Code Control", parent)
 
+        self.new_action = QAction("New", self)
         self.run_action = QAction("Run", self)
         self.stop_action = QAction("Stop/Reset", self)
         self.save_action = QAction("Save", self)
@@ -34,6 +36,7 @@ class CodeToolBar(QToolBar):
         self.port_combo.currentIndexChanged.connect(self._on_port_changed)
         self.port_combo.popup_about_to_show.connect(self.port_refresh_requested.emit)
 
+        self.new_action.triggered.connect(self.new_clicked.emit)
         self.run_action.triggered.connect(self.run_clicked.emit)
         self.stop_action.triggered.connect(self.stop_clicked.emit)
         self.save_action.triggered.connect(self.save_clicked.emit)
@@ -42,6 +45,7 @@ class CodeToolBar(QToolBar):
         # 保存按钮默认禁用（只有打开文件并修改后才启用）
         self.save_action.setEnabled(False)
 
+        self.addAction(self.new_action)
         self.addAction(self.run_action)
         self.addAction(self.stop_action)
         self.addSeparator()

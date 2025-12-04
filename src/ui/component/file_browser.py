@@ -12,6 +12,7 @@ class FileBrowser(QWidget):
     dir_expand_requested = Signal(str)  # 请求展开目录
     file_selected = Signal(str)         # 文件被选中（可选）
     file_open_requested = Signal(str)   # 请求打开文件（双击文件）
+    directory_loaded = Signal(str, list)  # 某个目录加载完成
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -82,6 +83,7 @@ class FileBrowser(QWidget):
         self._loading_paths.discard(path)
         self._clear_children(parent)
         self._populate_children(parent, items, path)
+        self.directory_loaded.emit(path, items)
 
     def _populate_children(self, parent: QTreeWidgetItem, items: list, path: str):
         """为指定父节点填充子节点"""
@@ -157,3 +159,65 @@ class FileBrowser(QWidget):
             self._remove_subtree(child)
         del item
 
+    def request_directory(self, path: str):
+        """对外暴露的加载目录接口"""
+        self._request_directory(path)
+
+    def get_directory_entries(self, path: str):
+        """获取指定目录的子项（如果已加载）"""
+        if path == self._root_path:
+            parent = self.tree.invisibleRootItem()
+        else:
+            parent = self._path_to_item.get(path)
+
+        if not parent:
+            return None
+
+        if parent.childCount() == 0:
+            return []
+
+        first_child = parent.child(0)
+        if first_child.isDisabled():
+            return None
+
+        entries = []
+        for i in range(parent.childCount()):
+            child = parent.child(i)
+            name = child.text(0)
+            is_dir = child.data(0, Qt.ItemDataRole.UserRole + 1)
+            entries.append((name, bool(is_dir)))
+
+        return entries
+
+    def get_known_directories(self) -> list[str]:
+        """返回当前已知的设备目录列表"""
+        directories = {'/'}
+        iterator = QTreeWidgetItemIterator(self.tree)
+        while iterator.value():
+            item = iterator.value()
+            path = item.data(0, Qt.ItemDataRole.UserRole)
+            is_dir = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            if path and is_dir:
+                directories.add(path)
+            iterator += 1
+        return sorted(directories)
+
+    def get_selected_directory(self) -> str:
+        """返回当前选中的目录，如果选中的是文件则返回其父目录"""
+        item = self.tree.currentItem()
+        while item:
+            path = item.data(0, Qt.ItemDataRole.UserRole)
+            is_dir = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            if path and is_dir:
+                return path
+            item = item.parent()
+        return '/'
+
+    def path_exists(self, path: str) -> tuple[bool, bool | None]:
+        if path == '/':
+            return True, True
+        item = self._path_to_item.get(path)
+        if not item:
+            return False, None
+        is_dir = bool(item.data(0, Qt.ItemDataRole.UserRole + 1))
+        return True, is_dir

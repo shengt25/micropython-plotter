@@ -25,26 +25,40 @@ class TabEditorWidget(QWidget):
         self.tab_widget.currentChanged.connect(self._on_current_tab_changed)
         layout.addWidget(self.tab_widget)
 
-        # 标签状态字典: {tab_index: {'path': str, 'modified': bool, 'editor': CodeEditor}}
+        # 标签状态字典: {tab_index: {'path': str | None, 'modified': bool, 'editor': CodeEditor, 'display_name': str}}
         self.tab_states = {}
+        self._untitled_counter = 1
 
         # 创建默认的未命名标签
-        self._create_default_tab()
+        self.create_new_tab()
 
-    def _create_default_tab(self):
-        """创建默认的未命名标签"""
+    def create_new_tab(self):
+        """创建新的未命名标签并切换过去"""
         editor = CodeEditor()
         editor.textChanged.connect(lambda: self._on_text_changed(editor))
         editor.save_requested.connect(self.save_requested.emit)
 
-        index = self.tab_widget.addTab(editor, "Untitled")
-        self.tab_widget.setTabToolTip(index, "Untitled")
+        title = self._next_untitled_title()
+        index = self.tab_widget.addTab(editor, title)
+        self.tab_widget.setTabToolTip(index, title)
 
         self.tab_states[index] = {
-            'path': None,  # None 表示未命名/未保存的文件
+            'path': None,
             'modified': False,
-            'editor': editor
+            'editor': editor,
+            'display_name': title
         }
+
+        self.tab_widget.setCurrentIndex(index)
+        return index
+
+    def _next_untitled_title(self) -> str:
+        if self._untitled_counter == 1:
+            title = "Untitled"
+        else:
+            title = f"Untitled {self._untitled_counter}"
+        self._untitled_counter += 1
+        return title
 
     def open_file(self, path: str, content: str):
         """
@@ -75,7 +89,8 @@ class TabEditorWidget(QWidget):
         self.tab_states[index] = {
             'path': path,
             'modified': False,
-            'editor': editor
+            'editor': editor,
+            'display_name': None
         }
 
         # 切换到新标签
@@ -161,11 +176,10 @@ class TabEditorWidget(QWidget):
         for index, state in self.tab_states.items():
             if state['editor'] == editor:
                 # 只有已保存的文件才需要标记修改
-                if state['path'] is not None and not state['modified']:
+                if not state['modified']:
                     state['modified'] = True
                     self._update_tab_title(index)
 
-                    # 如果是当前活动标签，发出信号
                     if index == self.tab_widget.currentIndex():
                         self.file_modified.emit(True)
                 break
@@ -180,8 +194,7 @@ class TabEditorWidget(QWidget):
         modified = state['modified']
 
         if path is None:
-            # 未命名文件
-            title = "Untitled"
+            title = state.get('display_name') or "Untitled"
         else:
             # 已命名文件
             filename = path.split('/')[-1]
@@ -211,21 +224,8 @@ class TabEditorWidget(QWidget):
         """标签关闭请求"""
         if index not in self.tab_states:
             return
-
-        state = self.tab_states[index]
-
         # TODO: 如果文件已修改，询问是否保存（暂时不实现）
-
-        # 删除标签
-        self.tab_widget.removeTab(index)
-        del self.tab_states[index]
-
-        # 重新索引剩余标签（因为索引会变化）
-        self._reindex_tabs()
-
-        # 如果没有标签了，创建默认标签
-        if self.tab_widget.count() == 0:
-            self._create_default_tab()
+        self._remove_tab_at_index(index)
 
     def _reindex_tabs(self):
         """重新索引标签状态（删除标签后调用）"""
@@ -237,3 +237,42 @@ class TabEditorWidget(QWidget):
                     new_states[i] = state
                     break
         self.tab_states = new_states
+
+    def set_current_file_path(self, path: str):
+        """为当前标签设置文件路径"""
+        current_index = self.tab_widget.currentIndex()
+        if current_index == -1 or current_index not in self.tab_states:
+            return
+
+        state = self.tab_states[current_index]
+        state['path'] = path
+        state['display_name'] = None
+        self.tab_widget.setTabToolTip(current_index, path)
+        self._update_tab_title(current_index)
+        self._close_duplicate_tabs(current_index, path)
+        self.active_file_changed.emit(path)
+
+    def current_is_untitled(self) -> bool:
+        """返回当前标签是否尚未命名"""
+        current_index = self.tab_widget.currentIndex()
+        if current_index == -1 or current_index not in self.tab_states:
+            return False
+
+        state = self.tab_states[current_index]
+        return state['path'] is None
+
+    def _close_duplicate_tabs(self, current_index: int, path: str):
+        duplicates = [idx for idx, state in self.tab_states.items() if state['path'] == path and idx != current_index]
+        for idx in sorted(duplicates, reverse=True):
+            self._remove_tab_at_index(idx)
+
+    def _remove_tab_at_index(self, index: int):
+        if index not in self.tab_states:
+            return
+
+        self.tab_widget.removeTab(index)
+        del self.tab_states[index]
+        self._reindex_tabs()
+
+        if self.tab_widget.count() == 0:
+            self.create_new_tab()

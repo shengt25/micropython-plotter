@@ -1,10 +1,11 @@
-from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QSplitter, QStatusBar, QMessageBox
+from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QSplitter, QStatusBar, QMessageBox, QDialog
 from PySide6.QtCore import Qt, QThread, QTimer
 from .plotter_window import PlotterWindow
 from .component.toolbar import CodeToolBar
 from .component.tab_editor import TabEditorWidget
 from .component.output_console import OutputConsole
 from .component.file_browser import FileBrowser
+from .component.device_save_dialog import DeviceSaveDialog
 from worker.device_worker import DeviceWorker
 from utils.serial_scanner import find_pico_ports, format_label
 
@@ -120,6 +121,7 @@ class CodeWindow(QMainWindow):
     def _connect_signals(self):
         """连接信号和槽"""
         # 工具栏按钮 -> Worker 操作
+        self.toolbar.new_clicked.connect(self.on_new_file)
         self.toolbar.run_clicked.connect(self.on_run_code)
         self.toolbar.stop_clicked.connect(self.on_stop_code)
         self.toolbar.save_clicked.connect(self.on_save_file)
@@ -258,6 +260,10 @@ class CodeWindow(QMainWindow):
             self._connect_when_ready = True
             self.status_bar.showMessage(f"Selected {port}，getting ready...")
 
+    def on_new_file(self):
+        self.tab_editor.create_new_tab()
+        self.status_bar.showMessage("Created new tab")
+
     def on_run_code(self):
         """运行代码按钮处理"""
         # 1. 先检查当前文件是否需要保存
@@ -365,12 +371,31 @@ class CodeWindow(QMainWindow):
     def on_save_file(self):
         """保存文件按钮处理"""
         path, content, modified = self.tab_editor.get_current_file_info()
+        is_new_file = path is None
 
-        if not path:
-            self.output_console.append_error("[File] No corresponding file for this tab, creating file is not supported yet")
-            return
+        if is_new_file:
+            selected_path = self._prompt_save_location()
+            if not selected_path:
+                self.output_console.append_info("[File] Save cancelled")
+                return
 
-        if not modified:
+            exists, is_dir = self.file_browser.path_exists(selected_path)
+            if exists and not is_dir:
+                reply = QMessageBox.question(
+                    self,
+                    "Overwrite file?",
+                    f"{selected_path} already exists. Overwrite?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.No,
+                )
+                if reply != QMessageBox.StandardButton.Yes:
+                    self.output_console.append_info("[File] Save cancelled")
+                    return
+
+            self.tab_editor.set_current_file_path(selected_path)
+            path = selected_path
+
+        if not modified and not is_new_file:
             self.output_console.append_info("[File] No modification made")
             return
 
@@ -395,7 +420,22 @@ class CodeWindow(QMainWindow):
     def on_file_modified(self, modified: bool):
         """文件修改状态改变处理"""
         # 更新保存按钮状态
-        self.toolbar.save_action.setEnabled(modified)
+        can_save = modified or self.tab_editor.current_is_untitled()
+        self.toolbar.save_action.setEnabled(can_save)
+
+    def _prompt_save_location(self) -> str | None:
+        default_dir = self.file_browser.get_selected_directory()
+        dialog = DeviceSaveDialog(
+            default_directory=default_dir,
+            default_name="untitled.py",
+            file_browser=self.file_browser,
+            parent=self,
+        )
+
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            return dialog.selected_path()
+
+        return None
 
     def on_active_file_changed(self, path: str):
         """活动文件改变处理"""
@@ -407,7 +447,8 @@ class CodeWindow(QMainWindow):
 
         # 更新保存按钮状态
         _, _, modified = self.tab_editor.get_current_file_info()
-        self.toolbar.save_action.setEnabled(modified)
+        can_save = modified or self.tab_editor.current_is_untitled()
+        self.toolbar.save_action.setEnabled(can_save)
 
     def set_buttons_enabled(self, enabled: bool):
         """设置按钮启用/禁用状态"""

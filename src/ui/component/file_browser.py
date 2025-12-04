@@ -163,6 +163,10 @@ class FileBrowser(QWidget):
         """对外暴露的加载目录接口"""
         self._request_directory(path)
 
+    def cancel_directory_request(self, path: str):
+        """外部通知目录加载失败，恢复请求状态"""
+        self._loading_paths.discard(path)
+
     def get_directory_entries(self, path: str):
         """获取指定目录的子项（如果已加载）"""
         if path == self._root_path:

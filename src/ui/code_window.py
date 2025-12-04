@@ -47,6 +47,7 @@ class CodeWindow(QMainWindow):
         self.current_port = None
         self.worker_ready = False
         self._connect_when_ready = False
+        self._busy_directory_paths: set[str] = set()
 
         # 创建文件浏览器
         self.file_browser = FileBrowser()
@@ -152,6 +153,7 @@ class CodeWindow(QMainWindow):
         # Worker -> 文件操作
         self.worker.read_file_finished.connect(self.on_read_file_finished)
         self.worker.write_file_finished.connect(self.on_write_file_finished)
+        self.worker.file_access_busy.connect(self.on_file_access_busy)
 
         # TabEditor -> UI
         self.tab_editor.file_modified.connect(self.on_file_modified)
@@ -333,6 +335,16 @@ class CodeWindow(QMainWindow):
         """目录列出完成处理"""
         if success:
             self.file_browser.populate_directory(path, items)
+            self._busy_directory_paths.discard(path)
+            return
+
+        if path in self._busy_directory_paths:
+            # 设备忙导致目录刷新失败，保持已有列表
+            self._busy_directory_paths.discard(path)
+            self.file_browser.cancel_directory_request(path)
+            self.output_console.append_info(
+                f"[File browser] Device busy while refreshing {path}, keeping previous entries"
+            )
             return
 
         self.file_browser.show_error(f"[File browser] Cannot list directory: {path}")
@@ -425,6 +437,31 @@ class CodeWindow(QMainWindow):
         # 更新保存按钮状态
         can_save = modified or self.tab_editor.current_is_untitled()
         self.toolbar.save_action.setEnabled(can_save)
+
+    def on_file_access_busy(self, operation: str, path: str):
+        """显示设备忙提示框，允许用户停止程序"""
+        base_text = operation or "the requested file operation"
+        if operation == "list directory" and path:
+            self._busy_directory_paths.add(path)
+        if path:
+            operation_text = f"{base_text} ({path})"
+        else:
+            operation_text = base_text
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("Device Busy")
+        dialog.setText(f"Cannot {operation_text}: the device is busy.")
+        dialog.setInformativeText(
+            "Stop the program or reset the device by reconnecting to the computer."
+        )
+
+        got_it_button = dialog.addButton("OK", QMessageBox.ButtonRole.AcceptRole)
+        stop_button = dialog.addButton("Stop program", QMessageBox.ButtonRole.ActionRole)
+        dialog.setDefaultButton(got_it_button)
+        dialog.exec()
+
+        if dialog.clickedButton() == stop_button:
+            self.worker.stop_requested.emit()
 
     def _prompt_save_location(self) -> str | None:
         default_dir = self.file_browser.get_selected_directory()

@@ -31,6 +31,7 @@ class DeviceWorker(QObject):
     list_dir_finished = Signal(bool, str, list)  # 列出目录完成 (success, path, items)
     read_file_finished = Signal(bool, str, str)  # 读取文件完成 (success, path, content)
     write_file_finished = Signal(bool, str)      # 写入文件完成 (success, path)
+    file_access_busy = Signal(str, str)          # 设备忙导致文件操作失败 (operation, path)
 
     # Signals - 进度信息
     progress = Signal(str)              # 进度消息（显示在输出控制台）
@@ -257,6 +258,7 @@ class DeviceWorker(QObject):
                 response = self.device_manager.read_until(b'OK', timeout=2)
                 if b'OK' not in response:
                     logger.warning(f"[文件浏览器] 未收到确认: {path}")
+                    self.file_access_busy.emit("list directory", path)
                     self.list_dir_finished.emit(False, path, [])
                     return
 
@@ -320,21 +322,13 @@ class DeviceWorker(QObject):
 
                     if b'OK' not in response:
                         logger.warning(f"[文件读取] 设备无响应或忙碌，响应: {response[:50]}")
-
-                        # 友好提示用户
-                        self.progress.emit("[File] Device busy or not responding")
-                        self.progress.emit("[Tip] If device is running code, please click Stop button")
-
+                        self.file_access_busy.emit("read file", path)
                         self.read_file_finished.emit(False, path, "")
                         return
 
                 except Exception as e:
                     logger.error(f"[文件读取] 读取确认超时: {e}")
-
-                    # 友好提示用户
-                    self.progress.emit("[File] Device response timeout")
-                    self.progress.emit("[Tip] Please click Stop button or check device connection")
-
+                    self.file_access_busy.emit("read file", path)
                     self.read_file_finished.emit(False, path, "")
                     return
 
@@ -404,21 +398,13 @@ class DeviceWorker(QObject):
 
                     if b'OK' not in response:
                         logger.warning(f"[文件写入] 设备无响应或忙碌")
-
-                        # 友好提示用户
-                        self.progress.emit("[File] Device busy or not responding")
-                        self.progress.emit("[Tip] If device is running code, please click Stop button")
-
+                        self.file_access_busy.emit("write file", path)
                         self.write_file_finished.emit(False, path)
                         return
 
                 except Exception as e:
                     logger.error(f"[文件写入] 读取确认超时: {e}")
-
-                    # 友好提示用户
-                    self.progress.emit("[File] Device response timeout")
-                    self.progress.emit("[Tip] Please click Stop button or check device connection")
-
+                    self.file_access_busy.emit("write file", path)
                     self.write_file_finished.emit(False, path)
                     return
 

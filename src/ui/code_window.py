@@ -1,5 +1,5 @@
 from PySide6.QtWidgets import QMainWindow, QWidget, QVBoxLayout, QSplitter, QStatusBar, QMessageBox
-from PySide6.QtCore import Qt, QThread
+from PySide6.QtCore import Qt, QThread, QTimer
 from .plotter_window import PlotterWindow
 from .component.toolbar import CodeToolBar
 from .component.tab_editor import TabEditorWidget
@@ -24,6 +24,9 @@ class CodeWindow(QMainWindow):
 
         # 创建 UI 组件
         self._setup_ui()
+
+        # 创建串口监控
+        self._setup_port_monitor()
 
         # 创建后台线程和 Worker
         self._setup_worker()
@@ -79,6 +82,12 @@ class CodeWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Initializing...")
+
+    def _setup_port_monitor(self):
+        self.port_monitor = QTimer(self)
+        self.port_monitor.setInterval(1500)
+        self.port_monitor.timeout.connect(self._check_current_port_status)
+        self.port_monitor.start()
 
     def _setup_worker(self):
         """设置后台线程和 Worker"""
@@ -147,7 +156,9 @@ class CodeWindow(QMainWindow):
         self.tab_editor.active_file_changed.connect(self.on_active_file_changed)
         self.tab_editor.save_requested.connect(self.on_save_file)
 
-        self.toolbar.port_refresh_requested.connect(lambda: self.refresh_ports())
+        self.toolbar.port_refresh_requested.connect(
+            lambda: self.refresh_ports(auto_connect=False, select_if_missing=False)
+        )
         self.toolbar.port_selected.connect(self.on_port_selected)
 
         self.worker.port_changed.connect(lambda port: self.status_bar.showMessage(f"Serial port switched to {port}"))
@@ -172,31 +183,68 @@ class CodeWindow(QMainWindow):
             self.worker.connect_requested.emit()
             self._connect_when_ready = False
 
-    def refresh_ports(self, auto_connect: bool = True):
-        ports = [(info.device, format_label(info)) for info in find_pico_ports()]
+    def refresh_ports(self, auto_connect: bool = True, select_if_missing: bool = True):
+        port_infos = list(find_pico_ports())
+        ports = [(info.device, format_label(info)) for info in port_infos]
         devices = [device for device, _ in ports]
 
         if not ports:
             self.current_port = None
             self.toolbar.set_ports([], None)
-            self.status_bar.showMessage("No Raspberry Pi Pico detected")
+            self.toolbar.show_disconnected_placeholder()
+            self.status_bar.showMessage("disconnected")
             self._connect_when_ready = False
             return
 
-        if not self.current_port or self.current_port not in devices:
+        selected_port = self.current_port if self.current_port in devices else None
+
+        if not selected_port and select_if_missing:
             self.current_port = devices[0]
+            selected_port = self.current_port
             self.status_bar.showMessage(f"Selected {self.current_port}")
+        else:
+            self.current_port = selected_port
 
-        self.toolbar.set_ports(ports, self.current_port)
+        self.toolbar.set_ports(ports, selected_port)
 
-        self.worker.set_port_requested.emit(self.current_port)
+        if not selected_port:
+            self.toolbar.show_disconnected_placeholder()
+            self.status_bar.showMessage("disconnected")
+            self._connect_when_ready = False
+            return
+
+        self.worker.set_port_requested.emit(selected_port)
 
         if auto_connect:
             if self.worker_ready:
-                self.status_bar.showMessage(f"Connecting {self.current_port}...")
+                self.status_bar.showMessage(f"Connecting {selected_port}...")
                 self.worker.connect_requested.emit()
             else:
                 self._connect_when_ready = True
+
+    def _check_current_port_status(self):
+        if not self.current_port:
+            return
+
+        port_infos = list(find_pico_ports())
+        devices = [info.device for info in port_infos]
+
+        if self.current_port in devices:
+            return
+
+        self._handle_device_disconnected(port_infos)
+
+    def _handle_device_disconnected(self, port_infos):
+        if not self.current_port:
+            return
+
+        self.worker.disconnect_requested.emit()
+        self.current_port = None
+        self._connect_when_ready = False
+        ports = [(info.device, format_label(info)) for info in port_infos]
+        self.toolbar.set_ports(ports, None)
+        self.toolbar.show_disconnected_placeholder()
+        self.status_bar.showMessage("disconnected")
 
     def on_port_selected(self, port: str):
         if port == self.current_port:
@@ -416,6 +464,9 @@ class CodeWindow(QMainWindow):
 
     def closeEvent(self, event):
         """窗口关闭事件"""
+        if hasattr(self, "port_monitor") and self.port_monitor.isActive():
+            self.port_monitor.stop()
+
         # 1. 关闭绘图窗口
         if self.plotter_window:
             self.plotter_window.close()

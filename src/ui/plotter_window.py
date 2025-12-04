@@ -3,10 +3,10 @@ from collections import deque
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel,
     QPushButton, QDialog, QFormLayout, QDialogButtonBox,
-    QColorDialog, QComboBox
+    QColorDialog, QComboBox, QSlider, QLineEdit
 )
 from PySide6.QtCore import Signal, Slot, QTimer, Qt
-from PySide6.QtGui import QColor
+from PySide6.QtGui import QColor, QIntValidator
 import pyqtgraph as pg
 
 
@@ -154,8 +154,8 @@ class PlotterWindow(QWidget):
         self.current_refresh_rate = 30  # Default 30 Hz
 
         # Display percentage control
-        self.display_percentages = [0.10, 0.25, 0.50, 0.75, 1.0]  # 10%, 25%, 50%, 75%, 100%
         self.current_display_percentage = 0.50  # Default 50%
+        self.pending_display_percentage = self.current_display_percentage
 
         # UI components (will be created in _setup_ui)
         self.channel_names = self.default_labels.copy()
@@ -163,6 +163,9 @@ class PlotterWindow(QWidget):
         self.curves = []
         self.stats_text = None
         self.ui_timer = None
+        self.display_slider = None
+        self.display_input = None
+        self.display_change_timer = None
 
         # Setup UI and timers
         self._setup_ui()
@@ -190,6 +193,12 @@ class PlotterWindow(QWidget):
         splitter.setStretchFactor(1, 1)  # Control: 20%
 
         main_layout.addWidget(splitter)
+
+        # Debounce timer for display percentage updates
+        self.display_change_timer = QTimer(self)
+        self.display_change_timer.setSingleShot(True)
+        self.display_change_timer.setInterval(300)
+        self.display_change_timer.timeout.connect(self._apply_display_percentage)
 
     def _create_plot_area(self):
         """Create the plotting area with pyqtgraph"""
@@ -264,14 +273,25 @@ class PlotterWindow(QWidget):
         layout.addSpacing(20)
 
         # Display percentage selection
-        layout.addWidget(QLabel("Display Range:"))
-        self.display_percentage_combo = QComboBox()
-        self.display_percentage_combo.addItems(["10%", "25%", "50%", "75%", "100%"])
-        self.display_percentage_combo.setCurrentIndex(2)  # Default 50%
-        self.display_percentage_combo.currentIndexChanged.connect(self._on_display_percentage_changed)
-        layout.addWidget(self.display_percentage_combo)
+        layout.addWidget(QLabel("Display Range (%):"))
+        display_container = QWidget()
+        display_layout = QHBoxLayout(display_container)
+        display_layout.setContentsMargins(0, 0, 0, 0)
 
-        layout.addSpacing(20)
+        self.display_slider = QSlider(Qt.Orientation.Horizontal)
+        self.display_slider.setRange(1, 100)
+        self.display_slider.setValue(int(self.current_display_percentage * 100))
+        self.display_slider.valueChanged.connect(self._on_display_slider_changed)
+        display_layout.addWidget(self.display_slider, stretch=1)
+
+        self.display_input = QLineEdit(str(int(self.current_display_percentage * 100)))
+        self.display_input.setValidator(QIntValidator(1, 100, self))
+        self.display_input.setMaximumWidth(60)
+        self.display_input.editingFinished.connect(self._on_display_input_edited)
+        display_layout.addWidget(self.display_input)
+
+        layout.addWidget(display_container)
+        layout.addSpacing(10)
 
         # Pause/Resume button
         self.pause_button = QPushButton("Pause")
@@ -339,9 +359,53 @@ class PlotterWindow(QWidget):
             self.pause_button.setText("Pause")
 
     @Slot(int)
-    def _on_display_percentage_changed(self, index):
-        """Handle display percentage change"""
-        self.current_display_percentage = self.display_percentages[index]
+    def _on_display_slider_changed(self, value):
+        """Handle slider movement for display percentage"""
+        if not self.display_input:
+            return
+        self._update_display_input(value)
+        self._schedule_display_percentage_update(value / 100.0)
+
+    @Slot()
+    def _on_display_input_edited(self):
+        """Handle manual numeric entry for display percentage"""
+        if not self.display_slider or not self.display_input:
+            return
+
+        text = self.display_input.text().strip()
+        if not text:
+            value = self.display_slider.value()
+        else:
+            try:
+                value = int(text)
+            except ValueError:
+                value = self.display_slider.value()
+        value = max(1, min(100, value))
+        if value != self.display_slider.value():
+            self.display_slider.blockSignals(True)
+            self.display_slider.setValue(value)
+            self.display_slider.blockSignals(False)
+        self._update_display_input(value)
+        self._schedule_display_percentage_update(value / 100.0)
+
+    def _update_display_input(self, value: int):
+        if not self.display_input:
+            return
+        current_text = self.display_input.text()
+        new_text = str(value)
+        if current_text == new_text:
+            return
+        self.display_input.blockSignals(True)
+        self.display_input.setText(new_text)
+        self.display_input.blockSignals(False)
+
+    def _schedule_display_percentage_update(self, ratio: float):
+        self.pending_display_percentage = max(0.01, min(1.0, ratio))
+        if self.display_change_timer:
+            self.display_change_timer.start()
+
+    def _apply_display_percentage(self):
+        self.current_display_percentage = self.pending_display_percentage
 
     @Slot()
     def _open_color_settings(self):

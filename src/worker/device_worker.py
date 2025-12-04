@@ -166,25 +166,16 @@ class DeviceWorker(QObject):
 
         步骤：
         1. 停止后台监控
-        2. 检查连接
-        3. 发送停止信号
-        4. 如果串口异常，自动重新连接
+        2. 直接发送停止信号（不先握手，避免等待超时）
+        3. 如果串口异常，自动重新连接
         """
         # 1. 停止后台监控
         if self.monitor_timer and self.monitor_timer.isActive():
             self.monitor_timer.stop()
 
-        # 2. 确保连接
-        if not self.device_manager.is_connected():
-            self.progress.emit("[System] Connecting to device...")
-            self.status_changed.emit("Connecting...")
-            if not self.device_manager.connect():
-                self.progress.emit("[System] Device connection failed")
-                self.status_changed.emit("Connection failed")
-                self.stop_finished.emit(False)
-                return
-
-        # 2. 发送停止信号
+        # 2. 直接发送停止信号（无论是否显示为已连接）
+        # 即使串口状态不明，也先尝试发送 Ctrl+C/Ctrl+D
+        # 这样可以避免在设备疯狂输出时等待握手超时
         self.progress.emit("[Stop] Stopping code execution...")
         self.status_changed.emit("Stopping...")
 

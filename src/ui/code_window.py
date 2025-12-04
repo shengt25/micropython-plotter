@@ -409,6 +409,9 @@ class CodeWindow(QMainWindow):
             # 保存成功，标记为已保存
             self.tab_editor.mark_file_saved(path)
             self.output_console.append_info(f"[File] Save successfully: {path}")
+            parent_dir = self._parent_directory(path)
+            # 主动刷新父目录，确保文件浏览器立即反映保存结果
+            self.file_browser.request_directory(parent_dir)
 
             # 重新读取文件，确保内容一致
             self.output_console.append_info(f"[File] Reloading after saving...")
@@ -454,6 +457,17 @@ class CodeWindow(QMainWindow):
         """设置按钮启用/禁用状态"""
         self.toolbar.run_action.setEnabled(enabled)
         self.toolbar.stop_action.setEnabled(enabled)
+
+    @staticmethod
+    def _parent_directory(path: str) -> str:
+        """返回文件的父目录（路径为空时返回根目录）"""
+        if not path:
+            return '/'
+        normalized = path.rstrip('/') or '/'
+        if normalized == '/':
+            return '/'
+        parent = normalized.rsplit('/', 1)[0]
+        return parent or '/'
 
     def on_plot_clicked(self):
         """绘图按钮点击处理"""

@@ -105,7 +105,7 @@ class CodeRunner(QObject):
                 # 1. 交替发送 Ctrl+C 和 Ctrl+D，增强中断能力
                 # Ctrl+C 用于中断运行的程序
                 # Ctrl+D 用于执行并触发 soft reset
-                for i in range(5):
+                for i in range(3):
                     # 发送 Ctrl+C
                     self.dm.serial.write(b'\x03')
                     logger.debug(f"[停止代码] 发送 Ctrl+C (尝试 {i+1}/5)")

@@ -11,7 +11,6 @@ class CodeRunner(QObject):
     """
 
     # Qt Signals
-    output_received = Signal(str)  # 输出消息
     error_received = Signal(str)   # 错误消息
 
     def __init__(self, device_manager: DeviceManager):
@@ -43,7 +42,6 @@ class CodeRunner(QObject):
                 self.error_received.emit(f"Execution failed: {error_msg}")
                 return False
 
-            self.output_received.emit(f"[CodeRunner] Running: {filepath}")
             return True
 
         except Exception as e:
@@ -133,7 +131,6 @@ class CodeRunner(QObject):
                 self.dm.read_until(b'>', timeout=1)
 
                 logger.info("[停止代码] 软重启成功，REPL 就绪")
-                self.output_received.emit("[System] Program stopped")
                 return True
 
         except SerialException as e:

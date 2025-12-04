@@ -72,7 +72,6 @@ class DeviceWorker(QObject):
         self.plot_handler = PlotStreamHandler(self.device_manager)
 
         # 连接 CodeRunner 的 Signals 并转发到 UI
-        self.code_runner.output_received.connect(self.output_received.emit)
         self.code_runner.error_received.connect(self.error_received.emit)
 
         # 连接 PlotStreamHandler 的 Signals

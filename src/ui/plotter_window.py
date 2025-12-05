@@ -1,4 +1,5 @@
 import time
+import math
 import numpy as np
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel,
@@ -157,10 +158,11 @@ class PlotterWindow(QWidget):
         self.refresh_rates = [10, 20, 30, 60]  # Hz
         self.current_refresh_rate = 30  # Default 30 Hz
 
-        # Zoom control (10 = 1.0x, 15 = 1.5x, 20 = 2.0x, etc.)
-        # Slider uses 10x scale to support 0.1x precision
-        self.current_zoom_level = 10  # Default 1.0x (show all data), slider value
+        # Zoom control with logarithmic mapping
+        # Slider range: 1-100 (linear) → Zoom: 1.0x-50.0x (logarithmic)
+        self.current_zoom_level = 1  # Default slider value (1 = 1.0x zoom)
         self.pending_zoom_level = self.current_zoom_level
+        self.max_zoom_multiplier = 50  # Maximum zoom multiplier (50x)
         self.min_visible_points = 100  # Minimum points to display when zoomed in
 
         # UI components (will be created in _setup_ui)
@@ -281,18 +283,12 @@ class PlotterWindow(QWidget):
 
         layout.addSpacing(20)
 
-        # Zoom control
+        # Zoom control with logarithmic mapping
         layout.addWidget(QLabel("Zoom:"))
 
-        # Calculate max zoom based on min visible points
-        # If buffer is 5000 points and min is 100, max zoom = 5000/100 = 50x
-        # Slider uses 10x scale: 10 = 1.0x, 500 = 50.0x
-        max_zoom_multiplier = max(1, int(self.max_points / self.min_visible_points))
-        self.max_zoom = max_zoom_multiplier * 10  # Convert to slider scale (e.g., 500 for 50x)
-
-        # Zoom slider (full width on first row)
+        # Zoom slider (linear 1-100, maps to logarithmic 1.0x-50.0x)
         self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
-        self.zoom_slider.setRange(10, self.max_zoom)  # 1.0x (10) to max (e.g., 50.0x = 500)
+        self.zoom_slider.setRange(1, 100)  # Linear slider range
         self.zoom_slider.setValue(self.current_zoom_level)
         self.zoom_slider.valueChanged.connect(self._on_zoom_slider_changed)
         layout.addWidget(self.zoom_slider)
@@ -302,8 +298,9 @@ class PlotterWindow(QWidget):
         zoom_input_layout = QHBoxLayout(zoom_input_container)
         zoom_input_layout.setContentsMargins(0, 0, 0, 0)
 
-        # Display as decimal (e.g., "1.0", "2.5", "10.0")
-        self.zoom_input = QLineEdit(f"{self.current_zoom_level / 10:.1f}")
+        # Display actual zoom multiplier (e.g., "1.0", "7.1", "50.0")
+        initial_zoom = self._slider_to_zoom(self.current_zoom_level)
+        self.zoom_input = QLineEdit(f"{initial_zoom:.1f}")
         self.zoom_input.setMaximumWidth(60)
         self.zoom_input.editingFinished.connect(self._on_zoom_input_edited)
         zoom_input_layout.addWidget(self.zoom_input)
@@ -396,54 +393,82 @@ class PlotterWindow(QWidget):
 
     @Slot(int)
     def _on_zoom_slider_changed(self, value):
-        """Handle slider movement for zoom level"""
+        """滑块值变化 → 转换为缩放倍数 → 更新输入框"""
         if not self.zoom_input:
             return
-        self._update_zoom_input(value)
+
+        # 转换为缩放倍数
+        zoom = self._slider_to_zoom(value)
+
+        # 更新输入框显示
+        self.zoom_input.blockSignals(True)
+        self.zoom_input.setText(f"{zoom:.1f}")
+        self.zoom_input.blockSignals(False)
+
         self._schedule_zoom_update(value)
 
     @Slot()
     def _on_zoom_input_edited(self):
-        """Handle manual numeric entry for zoom level (supports decimals)"""
+        """输入框编辑 → 解析缩放倍数 → 更新滑块"""
         if not self.zoom_slider or not self.zoom_input:
             return
 
         text = self.zoom_input.text().strip()
-        if not text:
-            value = self.zoom_slider.value()
-        else:
-            try:
-                # Parse as float (e.g., "1.5", "2.0", "10.5")
-                zoom_float = float(text)
-                # Convert to slider scale (multiply by 10)
-                value = int(zoom_float * 10)
-            except ValueError:
-                value = self.zoom_slider.value()
+        try:
+            zoom = float(text)
+            zoom = max(1.0, min(self.max_zoom_multiplier, zoom))
 
-        # Clamp to valid range (10 = 1.0x, max_zoom = e.g., 500 = 50.0x)
-        value = max(10, min(self.max_zoom, value))
+            # 转换为滑块值
+            slider_value = self._zoom_to_slider(zoom)
 
-        if value != self.zoom_slider.value():
             self.zoom_slider.blockSignals(True)
-            self.zoom_slider.setValue(value)
+            self.zoom_slider.setValue(slider_value)
             self.zoom_slider.blockSignals(False)
 
-        self._update_zoom_input(value)
-        self._schedule_zoom_update(value)
+            # 更新显示
+            self.zoom_input.setText(f"{zoom:.1f}")
+            self._schedule_zoom_update(slider_value)
 
-    def _update_zoom_input(self, value: int):
-        """Update zoom input field with new value (display as decimal)"""
-        if not self.zoom_input:
-            return
-        # Convert slider value to display value (e.g., 10 -> "1.0", 25 -> "2.5")
-        zoom_display = value / 10.0
-        new_text = f"{zoom_display:.1f}"
-        current_text = self.zoom_input.text()
-        if current_text == new_text:
-            return
-        self.zoom_input.blockSignals(True)
-        self.zoom_input.setText(new_text)
-        self.zoom_input.blockSignals(False)
+        except ValueError:
+            # 无效输入，恢复当前值
+            zoom = self._slider_to_zoom(self.zoom_slider.value())
+            self.zoom_input.setText(f"{zoom:.1f}")
+
+    def _slider_to_zoom(self, slider_value: int) -> float:
+        """将线性滑块值转换为对数缩放倍数
+
+        Args:
+            slider_value: 滑块值（1-100）
+
+        Returns:
+            缩放倍数（1.0-50.0）
+        """
+        if slider_value <= 1:
+            return 1.0
+
+        # 对数映射：zoom = exp(ln(max_zoom) × (slider/100))
+        log_max = math.log(self.max_zoom_multiplier)
+        zoom = math.exp(log_max * slider_value / 100.0)
+
+        return zoom
+
+    def _zoom_to_slider(self, zoom: float) -> int:
+        """将缩放倍数转换回滑块值
+
+        Args:
+            zoom: 缩放倍数（1.0-50.0）
+
+        Returns:
+            滑块值（1-100）
+        """
+        if zoom <= 1.0:
+            return 1
+
+        # 反向对数映射：slider = 100 × ln(zoom) / ln(max_zoom)
+        log_max = math.log(self.max_zoom_multiplier)
+        slider = int(100.0 * math.log(zoom) / log_max)
+
+        return max(1, min(100, slider))
 
     def _schedule_zoom_update(self, zoom_level: int):
         """Schedule zoom level update with debouncing"""
@@ -539,9 +564,8 @@ class PlotterWindow(QWidget):
             return
 
         # Calculate visible points based on zoom level
-        # current_zoom_level is slider value: 10 = 1.0x, 15 = 1.5x, 20 = 2.0x, etc.
-        # Convert to actual multiplier
-        zoom_multiplier = self.current_zoom_level / 10.0
+        # Convert slider value (1-100) to zoom multiplier (1.0x-50.0x) using logarithmic mapping
+        zoom_multiplier = self._slider_to_zoom(self.current_zoom_level)
 
         if zoom_multiplier > 1.0:
             visible_count = max(

@@ -2,25 +2,27 @@
 
 This library helps you visualize data from your MicroPython device instantly. Follow these steps to get started.
 
-### Installation
+## Installation
 
-Before coding, you need to put the library on your device.
+Before coding, you need to install the library for plotting on your device. There are three ways to do it:
 
-1. Install `mpremote` package in your python environment 
+### Use the installation helper in the program (recommend)
+1. Connect your device to the computer  
+2. On the toolbar, click the button called `Install Plot Lib` (on the right)
 
-2. Use the `install.sh` or `install.cmd` script 
+### Use the installation script
+1. Connect your device to the computer  
+2. Make sure you have `mpremote` package in your python environment, or install it.
+3. Run the `install.sh` or `install.cmd` script in your terminal
 
-or:
-
-1. Connect your device to your computer.
-
-2. Open Thonny.
-
+### Use other tools
+1. Connect your device to the computer
+2. Open tools such as Thonny.
 3. Upload the `signal_plotter.py` file to the **`lib`** folder on your device.
 
 
 
-### How to Use in Code
+## How to Use in Code
 
 Using the plotter is very easy.
 
@@ -72,7 +74,7 @@ Using the plotter is very easy.
 
 
 
-### Notes
+## Notes
 
 - **Named Variables:** You must provide name-value pairs: `plotter.plot('name1', val1, 'name2', val2, ...)`
 - **Variable Names:** Must be strings, cannot be empty.
@@ -83,7 +85,7 @@ Using the plotter is very easy.
 
 - **On macOS**: You might receive a warning about the application and can't open it, open the `terminal` and run `xattr -d com.apple.quarantine <path-to-micropython-plotter>`, change the path to your actual path and name such as `micropython-plotter_macos_arm64.app`
 
-### About `print()`
+## About `print()`
 
 To make the plotting fast and smooth, this library **disables the standard Python `print()` function** by default. Namely:
 

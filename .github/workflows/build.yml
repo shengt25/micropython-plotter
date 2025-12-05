@@ -61,7 +61,30 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y patchelf
+          sudo apt-get install -y \
+            patchelf \
+            xvfb \
+            libx11-xcb1 \
+            libxcb1 \
+            libxcb-render0 \
+            libxcb-shape0 \
+            libxcb-shm0 \
+            libxcb-xfixes0 \
+            libxcb-xinerama0 \
+            libxcb-randr0 \
+            libxcb-image0 \
+            libxcb-icccm4 \
+            libxcb-keysyms1 \
+            libxcb-util1 \
+            libxkbcommon-x11-0 \
+            libxrender1 \
+            libxi6 \
+            libxcomposite1 \
+            libxcursor1 \
+            libxdamage1 \
+            libfontconfig1 \
+            libfreetype6 \
+            libglu1-mesa
 
       # 编译步骤
       - name: Build with Nuitka
@@ -91,7 +114,12 @@ jobs:
           echo "Building for $RUNNER_OS with args: $MODE_ARG $EXTRA_ARGS"
 
           # 2. 运行编译
-          uv run nuitka src/main.py \
+          XVFB_PREFIX=""
+          if [ "$RUNNER_OS" == "Linux" ]; then
+            XVFB_PREFIX="xvfb-run -a --server-args='-screen 0 1920x1080x24'"
+          fi
+          
+          $XVFB_PREFIX uv run nuitka src/main.py \
             $MODE_ARG \
             --assume-yes-for-downloads \
             --include-module=PySide6.QtOpenGL \

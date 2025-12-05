@@ -1,5 +1,6 @@
 import time
-from collections import deque
+import math
+import numpy as np
 from PySide6.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QSplitter, QLabel,
     QPushButton, QDialog, QFormLayout, QDialogButtonBox,
@@ -141,8 +142,12 @@ class PlotterWindow(QWidget):
         ]
 
         # Data buffers (5 channels)
-        self.buffers = [deque(maxlen=5000) for _ in range(5)]
-        self.time_buffer = deque(maxlen=5000)
+        self.max_points = 5000
+        self.time_buffer = np.zeros(self.max_points, dtype=np.float64)
+        self.channel_buffers = np.zeros((5, self.max_points), dtype=np.float32)
+        self.channel_valid_mask = np.zeros((5, self.max_points), dtype=bool)
+        self._buffer_size = 0
+        self._write_index = 0
         self.start_time = time.time()
 
         # Statistics
@@ -153,9 +158,12 @@ class PlotterWindow(QWidget):
         self.refresh_rates = [10, 20, 30, 60]  # Hz
         self.current_refresh_rate = 30  # Default 30 Hz
 
-        # Display percentage control
-        self.current_display_percentage = 0.50  # Default 50%
-        self.pending_display_percentage = self.current_display_percentage
+        # Zoom control with logarithmic mapping
+        # Slider range: 1-100 (linear) → Zoom: 1.0x-50.0x (logarithmic)
+        self.current_zoom_level = 1  # Default slider value (1 = 1.0x zoom)
+        self.pending_zoom_level = self.current_zoom_level
+        self.max_zoom_multiplier = 50  # Maximum zoom multiplier (50x)
+        self.min_visible_points = 100  # Minimum points to display when zoomed in
 
         # UI components (will be created in _setup_ui)
         self.channel_names = self.default_labels.copy()
@@ -163,9 +171,10 @@ class PlotterWindow(QWidget):
         self.curves = []
         self.stats_text = None
         self.ui_timer = None
-        self.display_slider = None
-        self.display_input = None
-        self.display_change_timer = None
+        self.view_box = None  # Cached ViewBox reference
+        self.zoom_slider = None
+        self.zoom_input = None
+        self.zoom_change_timer = None
 
         # Setup UI and timers
         self._setup_ui()
@@ -194,11 +203,11 @@ class PlotterWindow(QWidget):
 
         main_layout.addWidget(splitter)
 
-        # Debounce timer for display percentage updates
-        self.display_change_timer = QTimer(self)
-        self.display_change_timer.setSingleShot(True)
-        self.display_change_timer.setInterval(300)
-        self.display_change_timer.timeout.connect(self._apply_display_percentage)
+        # Debounce timer for zoom level updates
+        self.zoom_change_timer = QTimer(self)
+        self.zoom_change_timer.setSingleShot(True)
+        self.zoom_change_timer.setInterval(300)
+        self.zoom_change_timer.timeout.connect(self._apply_zoom_level)
 
     def _create_plot_area(self):
         """Create the plotting area with pyqtgraph"""
@@ -220,11 +229,14 @@ class PlotterWindow(QWidget):
         self.plot.setClipToView(True)
         self.plot.setDownsampling(auto=True, mode="peak")
 
-        # Configure ViewBox
+        # Configure ViewBox and cache reference for performance
         view_box = self.plot.getViewBox()
         view_box.setAutoVisible(x=True, y=True)  # Visible data only
         view_box.enableAutoRange(axis='y', enable=True)  # Auto-range Y
         view_box.setMouseEnabled(x=False, y=True)  # Disable mouse drag on X
+
+        # Cache ViewBox reference to avoid repeated lookups
+        self.view_box = view_box
 
         # Create 5 curves
         self.curves = []
@@ -255,7 +267,7 @@ class PlotterWindow(QWidget):
         layout.addWidget(title_label)
 
         # Color settings button
-        color_button = QPushButton("Color Settings...")
+        color_button = QPushButton("Colors")
         color_button.clicked.connect(self._open_color_settings)
         layout.addWidget(color_button)
 
@@ -271,25 +283,34 @@ class PlotterWindow(QWidget):
 
         layout.addSpacing(20)
 
-        # Display percentage selection
-        layout.addWidget(QLabel("Display Range (%):"))
-        display_container = QWidget()
-        display_layout = QHBoxLayout(display_container)
-        display_layout.setContentsMargins(0, 0, 0, 0)
+        # Zoom control with logarithmic mapping
+        layout.addWidget(QLabel("Zoom:"))
 
-        self.display_slider = QSlider(Qt.Orientation.Horizontal)
-        self.display_slider.setRange(1, 100)
-        self.display_slider.setValue(int(self.current_display_percentage * 100))
-        self.display_slider.valueChanged.connect(self._on_display_slider_changed)
-        display_layout.addWidget(self.display_slider, stretch=1)
+        # Zoom slider (linear 1-100, maps to logarithmic 1.0x-50.0x)
+        self.zoom_slider = QSlider(Qt.Orientation.Horizontal)
+        self.zoom_slider.setRange(1, 100)  # Linear slider range
+        self.zoom_slider.setValue(self.current_zoom_level)
+        self.zoom_slider.valueChanged.connect(self._on_zoom_slider_changed)
+        layout.addWidget(self.zoom_slider)
 
-        self.display_input = QLineEdit(str(int(self.current_display_percentage * 100)))
-        self.display_input.setValidator(QIntValidator(1, 100, self))
-        self.display_input.setMaximumWidth(60)
-        self.display_input.editingFinished.connect(self._on_display_input_edited)
-        display_layout.addWidget(self.display_input)
+        # Zoom input box with "x" label (on second row)
+        zoom_input_container = QWidget()
+        zoom_input_layout = QHBoxLayout(zoom_input_container)
+        zoom_input_layout.setContentsMargins(0, 0, 0, 0)
 
-        layout.addWidget(display_container)
+        # Display actual zoom multiplier (e.g., "1.0", "7.1", "50.0")
+        initial_zoom = self._slider_to_zoom(self.current_zoom_level)
+        self.zoom_input = QLineEdit(f"{initial_zoom:.1f}")
+        self.zoom_input.setMaximumWidth(60)
+        self.zoom_input.editingFinished.connect(self._on_zoom_input_edited)
+        zoom_input_layout.addWidget(self.zoom_input)
+
+        zoom_x_label = QLabel("x")
+        zoom_input_layout.addWidget(zoom_x_label)
+
+        zoom_input_layout.addStretch()  # Push to left
+
+        layout.addWidget(zoom_input_container)
         layout.addSpacing(10)
 
         # Pause/Resume button
@@ -311,23 +332,36 @@ class PlotterWindow(QWidget):
         self.ui_timer.timeout.connect(self.update_ui)
         self.ui_timer.start(interval_ms)
 
+        # Track last time statistics were updated (lazy update inside update_ui)
+        self._last_stats_update = 0.0
+
+    def _update_x_range(self, visible_time):
+        """Update X-axis display range for visible data"""
+        if len(visible_time) > 0:
+            self.view_box.enableAutoRange(axis='x', enable=False)
+            x_min = visible_time[0]
+            x_max = visible_time[-1]
+            # Add small padding to prevent edge clipping
+            padding = (x_max - x_min) * 0.02 if x_max > x_min else 0.1
+            self.view_box.setXRange(x_min - padding, x_max + padding, padding=0)
+
     def _update_legend(self):
-        """Recreate all curves to update legend with correct order"""
-        # Remove all existing curves
+        """Recreate all curves to update legend with correct names/colors"""
+        # Remove all existing curves (this also removes them from legend)
         for curve in self.curves:
             self.plot.removeItem(curve)
 
         # Clear curves list
         self.curves.clear()
 
-        # Recreate all curves in order (0 to 4)
+        # Recreate all curves in order (0 to target_count)
         target_count = max(0, min(self.active_channel_count, len(self.curve_colors)))
         for i in range(target_count):
             current_name = self.channel_names[i] if i < len(self.channel_names) else f"Channel {i + 1}"
             if not current_name:
                 current_name = f"Channel {i + 1}"
 
-            # Create new curve
+            # Create new curve (automatically added to legend)
             curve = self.plot.plot(
                 pen=pg.mkPen(self.curve_colors[i], width=2),
                 name=current_name,
@@ -358,53 +392,93 @@ class PlotterWindow(QWidget):
             self.pause_button.setText("Pause")
 
     @Slot(int)
-    def _on_display_slider_changed(self, value):
-        """Handle slider movement for display percentage"""
-        if not self.display_input:
+    def _on_zoom_slider_changed(self, value):
+        """滑块值变化 → 转换为缩放倍数 → 更新输入框"""
+        if not self.zoom_input:
             return
-        self._update_display_input(value)
-        self._schedule_display_percentage_update(value / 100.0)
+
+        # 转换为缩放倍数
+        zoom = self._slider_to_zoom(value)
+
+        # 更新输入框显示
+        self.zoom_input.blockSignals(True)
+        self.zoom_input.setText(f"{zoom:.1f}")
+        self.zoom_input.blockSignals(False)
+
+        self._schedule_zoom_update(value)
 
     @Slot()
-    def _on_display_input_edited(self):
-        """Handle manual numeric entry for display percentage"""
-        if not self.display_slider or not self.display_input:
+    def _on_zoom_input_edited(self):
+        """输入框编辑 → 解析缩放倍数 → 更新滑块"""
+        if not self.zoom_slider or not self.zoom_input:
             return
 
-        text = self.display_input.text().strip()
-        if not text:
-            value = self.display_slider.value()
-        else:
-            try:
-                value = int(text)
-            except ValueError:
-                value = self.display_slider.value()
-        value = max(1, min(100, value))
-        if value != self.display_slider.value():
-            self.display_slider.blockSignals(True)
-            self.display_slider.setValue(value)
-            self.display_slider.blockSignals(False)
-        self._update_display_input(value)
-        self._schedule_display_percentage_update(value / 100.0)
+        text = self.zoom_input.text().strip()
+        try:
+            zoom = float(text)
+            zoom = max(1.0, min(self.max_zoom_multiplier, zoom))
 
-    def _update_display_input(self, value: int):
-        if not self.display_input:
-            return
-        current_text = self.display_input.text()
-        new_text = str(value)
-        if current_text == new_text:
-            return
-        self.display_input.blockSignals(True)
-        self.display_input.setText(new_text)
-        self.display_input.blockSignals(False)
+            # 转换为滑块值
+            slider_value = self._zoom_to_slider(zoom)
 
-    def _schedule_display_percentage_update(self, ratio: float):
-        self.pending_display_percentage = max(0.01, min(1.0, ratio))
-        if self.display_change_timer:
-            self.display_change_timer.start()
+            self.zoom_slider.blockSignals(True)
+            self.zoom_slider.setValue(slider_value)
+            self.zoom_slider.blockSignals(False)
 
-    def _apply_display_percentage(self):
-        self.current_display_percentage = self.pending_display_percentage
+            # 更新显示
+            self.zoom_input.setText(f"{zoom:.1f}")
+            self._schedule_zoom_update(slider_value)
+
+        except ValueError:
+            # 无效输入，恢复当前值
+            zoom = self._slider_to_zoom(self.zoom_slider.value())
+            self.zoom_input.setText(f"{zoom:.1f}")
+
+    def _slider_to_zoom(self, slider_value: int) -> float:
+        """将线性滑块值转换为对数缩放倍数
+
+        Args:
+            slider_value: 滑块值（1-100）
+
+        Returns:
+            缩放倍数（1.0-50.0）
+        """
+        if slider_value <= 1:
+            return 1.0
+
+        # 对数映射：zoom = exp(ln(max_zoom) × (slider/100))
+        log_max = math.log(self.max_zoom_multiplier)
+        zoom = math.exp(log_max * slider_value / 100.0)
+
+        return zoom
+
+    def _zoom_to_slider(self, zoom: float) -> int:
+        """将缩放倍数转换回滑块值
+
+        Args:
+            zoom: 缩放倍数（1.0-50.0）
+
+        Returns:
+            滑块值（1-100）
+        """
+        if zoom <= 1.0:
+            return 1
+
+        # 反向对数映射：slider = 100 × ln(zoom) / ln(max_zoom)
+        log_max = math.log(self.max_zoom_multiplier)
+        slider = int(100.0 * math.log(zoom) / log_max)
+
+        return max(1, min(100, slider))
+
+    def _schedule_zoom_update(self, zoom_level: int):
+        """Schedule zoom level update with debouncing"""
+        self.pending_zoom_level = zoom_level
+        if self.zoom_change_timer:
+            self.zoom_change_timer.start()
+
+    def _apply_zoom_level(self):
+        """Apply pending zoom level (called after debounce timer)"""
+        self.current_zoom_level = self.pending_zoom_level
 
     @Slot()
     def _open_color_settings(self):
@@ -466,71 +540,60 @@ class PlotterWindow(QWidget):
             return
 
         current_time = time.time() - self.start_time
-        self.time_buffer.append(current_time)
 
-        # Append values to corresponding buffers
-        for i, val in enumerate(values):
-            if i < 5:  # Safety check
-                self.buffers[i].append(val)
+        # Write index where new sample should be stored
+        idx = self._write_index
+        self.time_buffer[idx] = current_time
+        self.channel_valid_mask[:, idx] = False
 
-        # Fill remaining buffers with None if values list is shorter
-        for i in range(len(values), 5):
-            self.buffers[i].append(None)
+        # Store provided channel values
+        for channel_index, val in enumerate(values[:5]):
+            self.channel_buffers[channel_index, idx] = val
+            self.channel_valid_mask[channel_index, idx] = True
+
+        # Advance circular buffer pointers
+        self._write_index = (idx + 1) % self.max_points
+        if self._buffer_size < self.max_points:
+            self._buffer_size += 1
 
         self.packet_count += 1
 
     def update_ui(self):
-        """Update curves and statistics (called by timer)"""
-        if len(self.time_buffer) == 0:
+        """Update curves (called by timer at configured Hz)"""
+        if self._buffer_size == 0:
             return
 
-        # Convert time buffer to list
-        time_array = list(self.time_buffer)
-        total_points = len(time_array)
+        # Calculate visible points based on zoom level
+        # Convert slider value (1-100) to zoom multiplier (1.0x-50.0x) using logarithmic mapping
+        zoom_multiplier = self._slider_to_zoom(self.current_zoom_level)
 
-        # Calculate how many points to display based on percentage
-        if self.current_display_percentage < 1.0:
-            # Show only the most recent N% points
-            points_to_show = max(1, int(total_points * self.current_display_percentage))
-            start_idx = total_points - points_to_show
-            visible_time = time_array[start_idx:]
+        if zoom_multiplier > 1.0:
+            visible_count = max(
+                self.min_visible_points,
+                int(self._buffer_size / zoom_multiplier)
+            )
         else:
-            # Show 100% (all points)
-            start_idx = 0
-            visible_time = time_array
+            visible_count = self._buffer_size  # 1.0x = show all
 
-        # Update each curve with visible data
-        for i, curve in enumerate(self.curves):
-            # Get data for this channel
-            data = list(self.buffers[i])
+        start_index = (self._write_index - visible_count) % self.max_points
+        indices = (start_index + np.arange(visible_count)) % self.max_points
+        visible_time = self.time_buffer[indices]
 
-            # Extract visible portion
-            if start_idx > 0:
-                visible_data = data[start_idx:]
-            else:
-                visible_data = data
-
-            # Filter out None values
-            filtered_data = [x for x in visible_data if x is not None]
-            filtered_time = visible_time[-len(filtered_data):] if filtered_data else []
-
-            if filtered_data:
-                curve.setData(filtered_time, filtered_data)
-            else:
+        # Update each curve with visible data using masks to skip missing samples
+        for channel_index, curve in enumerate(self.curves):
+            mask = self.channel_valid_mask[channel_index, indices]
+            if not np.any(mask):
                 curve.setData([], [])
+                continue
 
-        # Set X-axis range to show visible data
-        if len(visible_time) > 0:
-            view_box = self.plot.getViewBox()
-            view_box.enableAutoRange(axis='x', enable=False)
-            x_min = visible_time[0]
-            x_max = visible_time[-1]
-            # Add small padding to prevent edge clipping
-            padding = (x_max - x_min) * 0.02 if x_max > x_min else 0.1
-            view_box.setXRange(x_min - padding, x_max + padding, padding=0)
+            channel_values = self.channel_buffers[channel_index, indices][mask]
+            curve.setData(visible_time[mask], channel_values)
 
-        # Update statistics
-        self._update_stats()
+        # Update X-axis range using cached ViewBox reference
+        self._update_x_range(visible_time)
+
+        # Update statistics roughly once per second
+        self._maybe_update_stats()
 
     def _update_stats(self):
         """Update statistics label (simplified)"""
@@ -544,6 +607,13 @@ class PlotterWindow(QWidget):
         )
         self.stats_label.setText(stats)
 
+    def _maybe_update_stats(self):
+        """Throttle statistics updates to avoid redundant label refreshes"""
+        now = time.time()
+        if now - self._last_stats_update >= 1.0:
+            self._last_stats_update = now
+            self._update_stats()
+
     def showEvent(self, event):
         """Handle window show event - restart timer when window reopens"""
         super().showEvent(event)
@@ -554,7 +624,7 @@ class PlotterWindow(QWidget):
 
     def closeEvent(self, event):
         """Handle window close event"""
-        # Stop timer
+        # Stop timers
         if self.ui_timer:
             self.ui_timer.stop()
 

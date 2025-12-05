@@ -50,6 +50,10 @@ class CodeWindow(QMainWindow):
         self._busy_directory_paths: set[str] = set()
         self._pending_deletes: dict[str, bool] = {}  # 记录待删除路径的类型 {path: is_dir}
 
+        # 安装 Plot Lib 的状态追踪
+        self._installing_plot_lib = False
+        self._plot_lib_content = None  # 缓存本地文件内容
+
         # 创建文件浏览器
         self.file_browser = FileBrowser()
 
@@ -85,6 +89,11 @@ class CodeWindow(QMainWindow):
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
         self.status_bar.showMessage("Initializing...")
+
+        # 初始状态：未连接，禁用需要连接的按钮
+        self.toolbar.run_action.setEnabled(False)
+        self.toolbar.stop_action.setEnabled(False)
+        self.toolbar.disconnect_action.setEnabled(False)
 
     def _setup_port_monitor(self):
         self.port_monitor = QTimer(self)
@@ -128,6 +137,8 @@ class CodeWindow(QMainWindow):
         self.toolbar.run_clicked.connect(self.on_run_code)
         self.toolbar.stop_clicked.connect(self.on_stop_code)
         self.toolbar.save_clicked.connect(self.on_save_file)
+        self.toolbar.disconnect_clicked.connect(self.on_disconnect_clicked)
+        self.toolbar.install_plot_lib_clicked.connect(self.on_install_plot_lib_clicked)
 
         # Worker 初始化完成 -> 自动连接设备
         self.worker.initialized.connect(self._connect_device)
@@ -144,6 +155,7 @@ class CodeWindow(QMainWindow):
         self.worker.connect_finished.connect(self.on_connect_finished)
         self.worker.run_finished.connect(self.on_run_finished)
         self.worker.stop_finished.connect(self.on_stop_finished)
+        self.worker.disconnect_finished.connect(self.on_disconnect_finished)
 
         # 文件浏览器 -> Worker
         self.file_browser.dir_expand_requested.connect(self.worker.list_dir_requested.emit)
@@ -249,10 +261,14 @@ class CodeWindow(QMainWindow):
         self.worker.disconnect_requested.emit()
         self.current_port = None
         self._connect_when_ready = False
+
+        # 更新 UI 状态
+        self._update_ui_for_disconnected_state()
+
         ports = [(info.device, format_label(info)) for info in port_infos]
         self.toolbar.set_ports(ports, None)
         self.toolbar.show_disconnected_placeholder()
-        self.status_bar.showMessage("disconnected")
+        self.status_bar.showMessage("Device disconnected")
 
     def on_port_selected(self, port: str):
         if port == self.current_port:
@@ -306,8 +322,18 @@ class CodeWindow(QMainWindow):
         """连接完成处理"""
         if success:
             self.file_browser.initialize_root()
+            # 连接成功后启用断开按钮和操作按钮
+            self.toolbar.disconnect_action.setEnabled(True)
+            self.toolbar.run_action.setEnabled(True)
+            self.toolbar.stop_action.setEnabled(True)
+            self.toolbar.install_plot_lib_action.setEnabled(True)
         else:
             self.file_browser.show_error("Connecting to device failed")
+            # 连接失败，禁用所有需要连接的按钮
+            self.toolbar.disconnect_action.setEnabled(False)
+            self.toolbar.run_action.setEnabled(False)
+            self.toolbar.stop_action.setEnabled(False)
+            self.toolbar.install_plot_lib_action.setEnabled(False)
 
     def on_run_finished(self, success):
         """运行完成处理"""
@@ -370,6 +396,11 @@ class CodeWindow(QMainWindow):
 
     def on_read_file_finished(self, success: bool, path: str, content: str):
         """文件读取完成处理"""
+        # 检查是否是安装流程
+        if self._installing_plot_lib and path == '/lib/signal_plotter.py':
+            self._handle_plot_lib_check_result(success)
+            return
+
         if success:
             # 检查文件是否已经在标签中打开
             current_path, _, _ = self.tab_editor.get_current_file_info()
@@ -391,6 +422,26 @@ class CodeWindow(QMainWindow):
                 self.output_console.append_info(f"[File] Opened: {path}")
         else:
             self.output_console.append_error(f"[File] Open failed: {path}")
+
+    def _handle_plot_lib_check_result(self, file_exists: bool):
+        """处理 Plot Lib 文件检查结果"""
+        if file_exists:
+            # 文件已存在，询问用户是否更新
+            reply = QMessageBox.question(
+                self,
+                "Library Exists",
+                "signal_plotter.py already exists in /lib/ directory.\n\nUpdate?",
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if reply != QMessageBox.StandardButton.Yes:
+                self.output_console.append_info("[Install] Installation cancelled")
+                self._cleanup_installation_state()
+                return
+
+        # 执行安装
+        self.output_console.append_info("[Install] Installing library to device...")
+        self.worker.write_file_requested.emit('/lib/signal_plotter.py', self._plot_lib_content)
 
     def on_save_file(self):
         """保存文件按钮处理"""
@@ -427,8 +478,279 @@ class CodeWindow(QMainWindow):
         self.output_console.append_info(f"[File] Saving: {path}")
         self.worker.write_file_requested.emit(path, content)
 
+    def on_disconnect_clicked(self):
+        """断开连接按钮处理"""
+        # 禁用断开按钮，防止重复点击
+        self.toolbar.disconnect_action.setEnabled(False)
+
+        # 输出提示信息
+        self.output_console.append_info("[System] Requesting disconnect...")
+
+        # 触发 Worker 断开连接（异步执行）
+        self.worker.disconnect_requested.emit()
+
+    def on_disconnect_finished(self):
+        """断开连接完成处理"""
+        # 更新 UI 状态
+        self._update_ui_for_disconnected_state()
+
+        # 更新下拉菜单显示 "Disconnected"
+        self.toolbar.show_disconnected_placeholder()
+
+        # 更新状态栏
+        self.status_bar.showMessage("Disconnected")
+
+        # 清空 current_port（表示用户主动断开）
+        self.current_port = None
+
+    def on_install_plot_lib_clicked(self):
+        """Install Plot Lib 按钮处理"""
+        # 1. 获取库文件内容（内嵌在代码中，打包后也可用）
+        self._plot_lib_content = self._get_signal_plotter_lib_content()
+
+        # 2. 禁用按钮，防止重复点击
+        self.toolbar.install_plot_lib_action.setEnabled(False)
+        self._installing_plot_lib = True
+
+        # 3. 检查设备上是否已存在该文件
+        self.output_console.append_info("[Install] Checking device library...")
+        self.worker.read_file_requested.emit('/lib/signal_plotter.py')
+
+    def _get_signal_plotter_lib_content(self) -> str:
+        """获取 signal_plotter.py 库文件内容"""
+        # 内嵌库文件内容，确保打包后也能使用
+        return '''import builtins
+import sys
+from machine import UART, Pin
+
+
+class _SignalPlotter:
+    _MAX_PARAMS = 5
+    _MAX_NAME_LEN = 16
+    _CONFIG_INTERVAL = 10  # send name config every a few packets
+
+    def __init__(self):
+        self._built_in_print = builtins.print
+        builtins.print = lambda *a, **k: None
+
+        self._configured = False
+        self._packet_counter = 0
+
+        self._data_packet = bytearray(3 + self._MAX_PARAMS * 2)
+        self._data_view = None
+        self._config_packet = None
+
+        self._iface = sys.stdout.buffer
+        self._param_count = 0
+        self._param_names = []
+
+        self._debug_led = None
+        self._debug_led_acc = 0
+        self._debug_led_toggle_interval = 250
+
+        self._print_welcome_msg()
+
+    def _print_msg(self, msg):
+        self._built_in_print("[Signal_Plotter]", msg)
+
+    def _print_welcome_msg(self):
+        self._built_in_print("\\n[Signal Plotter]")
+        mode = "CDC" if self._iface == sys.stdout.buffer else "UART"
+        self._print_msg(f"Using {mode} mode")
+
+        self._print_msg("Built-in print() is suppressed by default.")
+        self._print_msg("Use plotter.print(...) for debug output.\\n")
+        self._print_msg("Use plotter.restore_print() to restore print function.\\n")
+
+        self._print_msg("Use plotter.plot('name1', val1, 'name2', val2, ...) to send data.")
+        self._print_msg("Maximum 5 variables can be print (int or float)\\n")
+
+    def _validate_and_extract_params(self, args):
+        """Validate format: 'name', value, 'name', value, ..."""
+        if len(args) % 2 != 0:
+            raise ValueError("Arguments must be pairs of ('name', value)")
+
+        if len(args) // 2 > self._MAX_PARAMS:
+            raise ValueError(f"Maximum {self._MAX_PARAMS} parameters allowed")
+
+        names = []
+        for i in range(0, len(args), 2):
+            name = args[i]
+            value = args[i + 1]
+
+            if not isinstance(name, str):
+                raise TypeError(f"Parameter {i // 2}: name must be string, got {type(name).__name__}")
+
+            if not isinstance(value, (int, float)):
+                raise TypeError(f"Parameter '{name}': value must be int or float, got {type(value).__name__}")
+
+            # Check encoded length
+            name_bytes = name.encode('utf-8')
+            if len(name_bytes) > self._MAX_NAME_LEN:
+                raise ValueError(f"Parameter name '{name}' exceeds {self._MAX_NAME_LEN} bytes when encoded")
+
+            if not name:
+                raise ValueError("Parameter name cannot be empty")
+
+            names.append(name)
+
+        return names
+
+    def _build_config_packet(self):
+        """Build configuration packet: 0xAA 0x02 [count] [len][name1][len][name2]..."""
+        packet = bytearray([0xAA, 0x02, self._param_count])
+
+        for name in self._param_names:
+            name_bytes = name.encode('utf-8')
+            packet.append(len(name_bytes))
+            packet.extend(name_bytes)
+
+        return packet
+
+    def _send_config(self):
+        """Send configuration packet"""
+        if self._config_packet:
+            self._iface.write(self._config_packet)
+
+    def set_uart_mode(self, tx=4, rx=5, baudrate=115200):
+        self._iface = UART(1, baudrate, tx=Pin(tx), rx=Pin(rx))
+        self._print_msg("Switched to UART mode")
+
+    def set_cdc_mode(self):
+        self._iface = sys.stdout.buffer
+        self._print_msg("Switched to CDC mode")
+
+    def enable_debug(self, led_pin, toggle_interval=250):
+        self._debug_led = Pin(led_pin, Pin.OUT)
+        self._debug_led_acc = 0
+        self._debug_led_toggle_interval = toggle_interval
+        self._print_msg(f"LED debug enabled on pin {led_pin}")
+
+    def disable_debug(self):
+        if self._debug_led:
+            self._debug_led.off()
+            self._debug_led = None
+            self._print_msg("LED debug disabled")
+
+    def restore_print(self):
+        builtins.print = self._built_in_print
+        self._print_msg("Built-in print() restored")
+
+    def suppress_print(self):
+        builtins.print = lambda *a, **k: None
+        self._print_msg("Built-in print() suppressed")
+
+    def print(self, *args, **kwargs):
+        self._built_in_print(*args, **kwargs)
+
+    def plot(self, *args):
+        # First call: validate and configure
+        if not self._configured:
+            self._param_names = self._validate_and_extract_params(args)
+            self._param_count = len(self._param_names)
+
+            # Prepare data packet buffer
+            self._data_packet[0] = 0xAA
+            self._data_packet[1] = 0x01
+            self._data_packet[2] = self._param_count
+            self._data_view = memoryview(self._data_packet)[:3 + self._param_count * 2]
+
+            # Prepare config packet
+            self._config_packet = self._build_config_packet()
+
+            self._configured = True
+            self._print_msg(f"Configured with {self._param_count} parameters: {', '.join(self._param_names)}")
+            self._send_config() # Send config packet once immediately, the client can connect quickly (if it's running)
+        else:
+            expected_args = self._param_count * 2
+            if len(args) != expected_args:
+                raise ValueError(
+                    f"plot() expects {expected_args} arguments (name/value pairs) after configuration"
+                )
+            for i, expected_name in enumerate(self._param_names):
+                current_name = args[i * 2]
+                if current_name != expected_name:
+                    raise ValueError(
+                        f"Parameter name/order mismatch at index {i}: expected '{expected_name}', got '{current_name}'"
+                    )
+
+        # Send config packet periodically
+        self._packet_counter += 1
+        if self._packet_counter % self._CONFIG_INTERVAL == 0:
+            self._send_config()
+
+        # Extract values and pack data
+        idx = 3
+        for i in range(1, len(args), 2):
+            v = int(args[i]) & 0xFFFF
+            self._data_packet[idx] = v & 0xFF
+            self._data_packet[idx + 1] = v >> 8
+            idx += 2
+
+        # Send data packet
+        self._iface.write(self._data_view)
+
+        # Debug LED toggle
+        if self._debug_led:
+            self._debug_led_acc = (self._debug_led_acc + 1) % self._debug_led_toggle_interval
+            if self._debug_led_acc == 0:
+                self._debug_led.toggle()
+
+
+plotter = _SignalPlotter()
+'''
+
+    def _update_ui_for_disconnected_state(self):
+        """断开连接后更新 UI 状态"""
+        # 1. 禁用需要连接的按钮
+        self.toolbar.run_action.setEnabled(False)
+        self.toolbar.stop_action.setEnabled(False)
+        self.toolbar.disconnect_action.setEnabled(False)
+        self.toolbar.install_plot_lib_action.setEnabled(False)
+
+        # 2. 清空文件浏览器
+        self.file_browser.show_error("Device not connected")
+
+        # 3. 关闭绘图窗口（如果打开）
+        if self.plotter_window:
+            self.plotter_window.close()
+            self.plotter_window.deleteLater()
+            self.plotter_window = None
+
+    def _cleanup_installation_state(self):
+        """重置安装状态并恢复按钮"""
+        self._installing_plot_lib = False
+        self._plot_lib_content = None
+        # 只有在连接状态下才重新启用按钮
+        if self.current_port and self.toolbar.disconnect_action.isEnabled():
+            self.toolbar.install_plot_lib_action.setEnabled(True)
+
     def on_write_file_finished(self, success: bool, path: str):
         """文件写入完成处理"""
+        # 检查是否是安装流程
+        if self._installing_plot_lib and path == '/lib/signal_plotter.py':
+            if success:
+                self.output_console.append_info("[Install] Library installed successfully!")
+                QMessageBox.information(
+                    self,
+                    "Installation Complete",
+                    "signal_plotter.py has been installed to /lib/ directory.\n\n"
+                    "You can now use:\nfrom signal_plotter import plotter",
+                    QMessageBox.StandardButton.Ok
+                )
+                # 刷新 /lib 目录
+                self.file_browser.request_directory('/lib')
+            else:
+                self.output_console.append_error("[Install] Installation failed")
+                QMessageBox.warning(
+                    self,
+                    "Installation Failed",
+                    "Failed to install library. Please check device connection.",
+                    QMessageBox.StandardButton.Ok
+                )
+            self._cleanup_installation_state()
+            return
+
         if success:
             # 保存成功，标记为已保存
             self.tab_editor.mark_file_saved(path)

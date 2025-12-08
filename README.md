@@ -75,6 +75,7 @@ Using the plotter is very easy.
    - Maximum 5 pairs of names and variables allowed
    - Variable names must be strings
    - Values must be int or float
+   - plotter.plot() can be called at only one place in your code (can be inside a loop, but one place).
 
    **Correct example:**
 

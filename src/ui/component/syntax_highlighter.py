@@ -4,23 +4,50 @@ Provides basic syntax highlighting for Python code using QSyntaxHighlighter
 """
 from PySide6.QtGui import QSyntaxHighlighter, QTextCharFormat, QFont, QColor
 from PySide6.QtCore import QRegularExpression
+from PySide6.QtWidgets import QApplication
 
 
 class PythonSyntaxHighlighter(QSyntaxHighlighter):
     """Python Syntax Highlighter"""
 
+    # VS Code Dark+ inspired palette
+    _DARK = {
+        "keyword":  "#569CD6",  # blue
+        "builtin":  "#4EC9B0",  # teal
+        "string":   "#CE9178",  # warm orange
+        "comment":  "#6A9955",  # muted green
+        "number":   "#B5CEA8",  # light green
+        "function": "#DCDCAA",  # yellow
+        "class":    "#4EC9B0",  # teal
+    }
+
+    # Classic light palette (original, slightly adjusted)
+    _LIGHT = {
+        "keyword":  "#0033B3",  # blue
+        "builtin":  "#7B2D8B",  # purple
+        "string":   "#067D17",  # green
+        "comment":  "#8C8C8C",  # gray
+        "number":   "#FF8C00",  # orange
+        "function": "#00627A",  # teal
+        "class":    "#00627A",  # teal
+    }
+
     def __init__(self, document):
         super().__init__(document)
 
-        # Define highlighting rules
+        app = QApplication.instance()
+        is_dark = (
+            app is not None
+            and app.palette().window().color().lightness() < 128
+        )
+        c = self._DARK if is_dark else self._LIGHT
+
         self.highlighting_rules = []
 
-        # Keyword format (blue bold)
         keyword_format = QTextCharFormat()
-        keyword_format.setForeground(QColor("#0000FF"))
+        keyword_format.setForeground(QColor(c["keyword"]))
         keyword_format.setFontWeight(QFont.Weight.Bold)
 
-        # Python keyword list
         keywords = [
             'and', 'as', 'assert', 'break', 'class', 'continue', 'def',
             'del', 'elif', 'else', 'except', 'False', 'finally', 'for',
@@ -28,77 +55,57 @@ class PythonSyntaxHighlighter(QSyntaxHighlighter):
             'nonlocal', 'not', 'or', 'pass', 'raise', 'return', 'True',
             'try', 'while', 'with', 'yield', 'async', 'await'
         ]
-
         for word in keywords:
-            pattern = QRegularExpression(f'\\b{word}\\b')
-            self.highlighting_rules.append((pattern, keyword_format))
+            self.highlighting_rules.append((QRegularExpression(f'\\b{word}\\b'), keyword_format))
 
-        # Built-in functions (dark purple)
         builtin_format = QTextCharFormat()
-        builtin_format.setForeground(QColor("#8B008B"))
+        builtin_format.setForeground(QColor(c["builtin"]))
         builtins = [
             'print', 'len', 'range', 'str', 'int', 'float', 'list', 'dict',
             'set', 'tuple', 'bool', 'type', 'isinstance', 'open', 'abs',
             'min', 'max', 'sum', 'all', 'any', 'enumerate', 'zip'
         ]
         for word in builtins:
-            pattern = QRegularExpression(f'\\b{word}\\b')
-            self.highlighting_rules.append((pattern, builtin_format))
+            self.highlighting_rules.append((QRegularExpression(f'\\b{word}\\b'), builtin_format))
 
-        # String (green)
         string_format = QTextCharFormat()
-        string_format.setForeground(QColor("#008000"))
-        # Double-quoted string
+        string_format.setForeground(QColor(c["string"]))
         self.highlighting_rules.append((
-            QRegularExpression('"[^"\\\\]*(\\\\.[^"\\\\]*)*"'),
-            string_format
+            QRegularExpression('"[^"\\\\]*(\\\\.[^"\\\\]*)*"'), string_format
         ))
-        # Single-quoted string
         self.highlighting_rules.append((
-            QRegularExpression("'[^'\\\\]*(\\\\.[^'\\\\]*)*'"),
-            string_format
+            QRegularExpression("'[^'\\\\]*(\\\\.[^'\\\\]*)*'"), string_format
         ))
 
-        # Comment (gray italic)
         comment_format = QTextCharFormat()
-        comment_format.setForeground(QColor("#808080"))
+        comment_format.setForeground(QColor(c["comment"]))
         comment_format.setFontItalic(True)
-        self.highlighting_rules.append((
-            QRegularExpression('#[^\n]*'),
-            comment_format
-        ))
+        self.highlighting_rules.append((QRegularExpression('#[^\n]*'), comment_format))
 
-        # Number (orange)
         number_format = QTextCharFormat()
-        number_format.setForeground(QColor("#FF8C00"))
+        number_format.setForeground(QColor(c["number"]))
         self.highlighting_rules.append((
-            QRegularExpression('\\b[0-9]+\\.?[0-9]*\\b'),
-            number_format
+            QRegularExpression('\\b[0-9]+\\.?[0-9]*\\b'), number_format
         ))
 
-        # Function definition (dark blue)
         function_format = QTextCharFormat()
-        function_format.setForeground(QColor("#00008B"))
+        function_format.setForeground(QColor(c["function"]))
         function_format.setFontWeight(QFont.Weight.Bold)
         self.highlighting_rules.append((
-            QRegularExpression('\\bdef\\s+([A-Za-z_][A-Za-z0-9_]*)'),
-            function_format
+            QRegularExpression('\\bdef\\s+([A-Za-z_][A-Za-z0-9_]*)'), function_format
         ))
 
-        # Class definition (dark blue)
         class_format = QTextCharFormat()
-        class_format.setForeground(QColor("#00008B"))
+        class_format.setForeground(QColor(c["class"]))
         class_format.setFontWeight(QFont.Weight.Bold)
         self.highlighting_rules.append((
-            QRegularExpression('\\bclass\\s+([A-Za-z_][A-Za-z0-9_]*)'),
-            class_format
+            QRegularExpression('\\bclass\\s+([A-Za-z_][A-Za-z0-9_]*)'), class_format
         ))
 
-        # Triple-quoted string format
         self.tri_single_format = QTextCharFormat()
-        self.tri_single_format.setForeground(QColor("#008000"))
+        self.tri_single_format.setForeground(QColor(c["string"]))
         self.tri_double_format = QTextCharFormat()
-        self.tri_double_format.setForeground(QColor("#008000"))
+        self.tri_double_format.setForeground(QColor(c["string"]))
 
     def highlightBlock(self, text):
         """Apply syntax highlighting to a text block"""

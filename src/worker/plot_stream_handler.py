@@ -82,12 +82,10 @@ class PlotStreamHandler(QObject):
                 break
 
         if sync_idx == -1:
-            # No sync found in entire buffer
-            # Emit all as text if buffer gets too large (avoid infinite growth)
-            if len(self.buffer) > 1024:  # Arbitrary threshold
-                text_bytes = bytes(self.buffer)
-                self._emit_text_bytes(text_bytes)
-                self.buffer.clear()
+            # No sync byte in buffer, guaranteed no plot packet, flush as text immediately
+            text_bytes = bytes(self.buffer)
+            self._emit_text_bytes(text_bytes)
+            self.buffer.clear()
             return None
 
         # 2. Need at least 2 bytes for header + packet type
@@ -181,6 +179,6 @@ class PlotStreamHandler(QObject):
             self.logger.debug("Suppressed %d bytes of plot/config data", len(data))
             return
 
-        text = data.decode('utf-8', errors='replace')
+        text = data.decode('utf-8', errors='replace').replace('\x04', '')
         if text:
             self.text_data_received.emit(text)

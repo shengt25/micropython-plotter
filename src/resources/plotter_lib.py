@@ -1,3 +1,4 @@
+SIGNAL_PLOTTER_SOURCE = '''\
 import builtins
 import sys
 from machine import UART, Pin
@@ -33,16 +34,16 @@ class _SignalPlotter:
         self._built_in_print("[Signal_Plotter]", msg)
 
     def _print_welcome_msg(self):
-        self._built_in_print("\n[Signal Plotter]")
+        self._built_in_print("\\n[Signal Plotter]")
         mode = "CDC" if self._iface == sys.stdout.buffer else "UART"
         self._print_msg(f"Using {mode} mode")
 
         self._print_msg("Built-in print() is suppressed by default.")
-        self._print_msg("Use plotter.print(...) for debug output.\n")
-        self._print_msg("Use plotter.restore_print() to restore print function.\n")
+        self._print_msg("Use plotter.print(...) for debug output.\\n")
+        self._print_msg("Use plotter.restore_print() to restore print function.\\n")
 
         self._print_msg("Use plotter.plot('name1', val1, 'name2', val2, ...) to send data.")
-        self._print_msg("Maximum 5 variables can be print (int or float)\n")
+        self._print_msg("Maximum 5 variables can be print (int or float)\\n")
 
     def _validate_and_extract_params(self, args):
         """Validate format: 'name', value, 'name', value, ..."""
@@ -177,3 +178,4 @@ class _SignalPlotter:
 
 
 plotter = _SignalPlotter()
+'''

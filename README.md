@@ -42,21 +42,12 @@ It won't break your MicroPython device, **but always backup the important data i
 
 ## Installation
 
-Before coding, you need to install the library for plotting on your device. There are three ways to do it:
+Before coding, you need to install the library for plotting on your device.
 
-### Use the installation helper in the program (recommend)
-1. Connect your device to the computer  
+1. Connect your device to the computer
 2. On the toolbar, click the button called `Install Plot Lib` (on the right)
 
-### Use the installation script
-1. Connect your device to the computer  
-2. Make sure you have `mpremote` package in your python environment, or install it.
-3. Run the `install.sh` or `install.cmd` script in your terminal
-
-### Use other tools
-1. Connect your device to the computer
-2. Open tools such as Thonny.
-3. Upload the `signal_plotter.py` file to the **`lib`** folder on your device.
+> If you need to install it manually with another tool, the library source lives in [`src/resources/plotter_lib.py`](src/resources/plotter_lib.py) (the `SIGNAL_PLOTTER_SOURCE` string) — copy its contents into a `signal_plotter.py` file and upload it to the **`lib`** folder on your device.
 
 
 
